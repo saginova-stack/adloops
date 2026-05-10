@@ -1,0 +1,42 @@
+{
+  "company": {
+    "name": "Example Co",
+    "url": "https://example.com",
+    "linkedinPage": "https://www.linkedin.com/company/example-co/"
+  },
+  "icp": {
+    "personas": ["Head of Growth at B2B SaaS", "Performance marketing lead"],
+    "industries": ["B2B SaaS", "Marketplaces"],
+    "companySizes": ["50-200", "200-1000"],
+    "geo": ["United States", "United Kingdom", "Germany", "Netherlands"],
+    "painPoints": [
+      "Spending too much time stitching ad data across platforms",
+      "Can't tell which campaigns are wasting budget"
+    ],
+    "negativeSignals": ["agencies", "students", "freelancers"]
+  },
+  "valueProps": [
+    "One audit twice a week instead of staring at dashboards",
+    "Catch budget waste before the month ends"
+  ],
+  "brandVoice": {
+    "tone": "direct, dry, low on adjectives",
+    "doSay": ["concrete numbers", "what changed", "what we did about it"],
+    "dontSay": ["revolutionary", "synergy", "10x", "game-changer"]
+  },
+  "colors": {
+    "primary": "#0F172A",
+    "secondary": "#1E293B",
+    "accent": "#22D3EE"
+  },
+  "guardrails": {
+    "maxDailyBudgetChangePct": 20,
+    "newCampaignRequiresApproval": false,
+    "neverIncreaseBudgetAbove": 500,
+    "platforms": {
+      "google": true,
+      "meta": true,
+      "linkedin": true
+    }
+  }
+}

@@ -1,0 +1,10 @@
+# Phase 1 runtime deps. Read-only audit + Telegram report.
+# Ad platform SDKs are imported lazily inside mcp_clients.py — they're only
+# needed when a platform's credentials are present.
+
+# Google Ads SDK (matches kLOsk/adloop @ v0.7.0 pinned version range).
+google-ads>=29.0.0
+
+# Test deps.
+pytest>=8.0
+jsonschema>=4.0

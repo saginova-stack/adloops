@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/saginova/adloops/brand.schema.json",
+  "title": "AdLoops Brand Configuration",
+  "type": "object",
+  "required": ["company", "icp", "valueProps", "brandVoice", "guardrails"],
+  "additionalProperties": false,
+  "properties": {
+    "company": {
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "linkedinPage": { "type": "string", "format": "uri" }
+      }
+    },
+    "icp": {
+      "type": "object",
+      "required": ["personas"],
+      "additionalProperties": false,
+      "properties": {
+        "personas": { "type": "array", "items": { "type": "string" } },
+        "industries": { "type": "array", "items": { "type": "string" } },
+        "companySizes": { "type": "array", "items": { "type": "string" } },
+        "geo": { "type": "array", "items": { "type": "string" } },
+        "painPoints": { "type": "array", "items": { "type": "string" } },
+        "negativeSignals": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "valueProps": { "type": "array", "items": { "type": "string" } },
+    "brandVoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "tone": { "type": "string" },
+        "doSay": { "type": "array", "items": { "type": "string" } },
+        "dontSay": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "colors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "primary": { "type": "string" },
+        "secondary": { "type": "string" },
+        "accent": { "type": "string" }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "required": ["maxDailyBudgetChangePct", "platforms"],
+      "additionalProperties": false,
+      "properties": {
+        "maxDailyBudgetChangePct": { "type": "number", "minimum": 0, "maximum": 100 },
+        "newCampaignRequiresApproval": { "type": "boolean" },
+        "neverIncreaseBudgetAbove": { "type": ["number", "null"], "minimum": 0 },
+        "platforms": {
+          "type": "object",
+          "required": ["google", "meta", "linkedin"],
+          "additionalProperties": false,
+          "properties": {
+            "google": { "type": "boolean" },
+            "meta": { "type": "boolean" },
+            "linkedin": { "type": "boolean" }
+          }
+        }
+      }
+    }
+  }
+}
