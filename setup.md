@@ -3,18 +3,27 @@
 This is the operator-facing setup guide. The skill itself is documented in
 `skill/SKILL.md`. Read both.
 
-## 0. What you're getting in Phase 1
+## 0. What you're getting
 
-Read-only audit of Google / Meta / LinkedIn ads, every Tuesday and Friday at
-09:00 local, posted to Telegram via the existing OpenClaw bot. Mutations
-(±20% cap) come in Phase 2; LinkedIn mutations in Phase 3.
+Twice-weekly (Tue/Fri 09:00 local) ad-account audit across Google Ads,
+Meta Ads, and LinkedIn Ads, posted to Telegram via the OpenClaw bot.
 
-Phase 1 also pulls **GA4 sessions and conversions for paid Google traffic**
-and joins them with Google Ads metrics — the report flags consent gaps
-(common in EU traffic) and Ads-vs-GA4 attribution discrepancies per
-campaign. This is the cross-reference value that comes from the vendored
-`kLOsk/adloop` MCP, computed in our own Python code in Phase 1 for cron
-determinism (the MCP itself becomes the write path in Phase 2).
+- **Phase 1 (read-only audit)**: 7-day performance per campaign, week-over-week
+  deltas, top movers (best + worst), and the GA4 cross-reference flags
+  (consent gap, attribution gap, real CPA) on Google Ads campaigns.
+- **Phase 2 (guardrailed mutations on Google + Meta — current)**: proposes
+  three rules — pause zombies, decrease budget −20% on CPA spike,
+  increase budget +20% on CPA drop with conversion lift. Each proposal
+  runs through `guardrails.check_mutation()`: AUTO dispatches immediately,
+  APPROVAL queues to the report's "Pending approvals" with a copy-paste
+  `--approve` command, REJECTED logs to `.audit.jsonl` and surfaces
+  nowhere else. Capped at 10 mutations per run. LLM-driven recommendations
+  (OpenRouter Nemotron → Anthropic Haiku → rule-based fallback) replace
+  the rule-based recommendations when a key is present.
+- **Phase 3 (LinkedIn mutations)**: pending LinkedIn Marketing Developer
+  Platform approval. The vendored `linkedin-ads-mcp` is installed but the
+  executor path isn't wired (`executors.dispatch` raises an explicit
+  "Phase 3 — blocked on MDP approval" error for LinkedIn mutations).
 
 ## 1. First-run install
 
@@ -110,7 +119,9 @@ If both are set, the service account wins.
 ### Meta Ads
 
 1. Create a Marketing API app: https://developers.facebook.com/apps/
-2. Generate a System User access token with `ads_read` scope (and `ads_management` for Phase 2).
+2. Generate a System User access token. **Required scopes**:
+   - `ads_read` — for the audit
+   - `ads_management` — for Phase 2 mutations (pause/enable/budget change)
 3. Find your ad account id (it looks like `act_1234567890`).
 
 ```
@@ -141,6 +152,21 @@ Copy the credentials into `.env`:
 LINKEDIN_ACCESS_TOKEN=...
 LINKEDIN_AD_ACCOUNT_URN=urn:li:sponsoredAccount:1234567890
 ```
+
+### Recommendations (optional)
+
+To upgrade the report's recommendations section from rule-based to
+LLM-driven, set one of:
+
+```
+OPENROUTER_API_KEY=sk-...      # Nemotron 3 Super free tier — preferred
+ANTHROPIC_API_KEY=sk-ant-...   # Claude Haiku — fallback if OpenRouter unset
+```
+
+If neither is set the rule-based recommender runs (flags zero-conversion
+spend and scaled-down winners). If an LLM call fails mid-flight the
+recommender falls through to the rule-based output — the section is
+never blanked.
 
 ## 4. Telegram
 
@@ -182,15 +208,24 @@ cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
 
 ## 6. Operational
 
-- **Audit log**: every mutation (Phase 2+) writes a JSONL line to
-  `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`. Read it after every run
-  in the first weeks of Phase 2 to catch anything weird.
+- **Audit log**: every guardrail decision (AUTO / APPROVAL / REJECTED) writes
+  a JSONL line to `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`. Read it
+  after every run in the first weeks of Phase 2 to catch anything weird.
+  Each line includes `run_id`, `platform`, `campaign_id`, `kind`, `decision`,
+  `rule`, `before`, `after`, `applied`.
 - **Snapshots**: live in `~/Syncthing/adloops-brand/campaigns/.archive/<run_id>.json`.
   Used as the diff baseline for the next run. Failed runs (no platform fetched)
   do not persist a snapshot — they'd poison the diff.
-- **Exit codes**: 0 ok, 2 brand config bad, 3 no platforms enabled, 4 audit
-  crashed, 5 Telegram unreachable, 6 Telegram send failed, 7 every enabled
-  platform errored.
+- **Approve a queued mutation**: when a budget change exceeds the cap or a
+  new campaign would launch non-PAUSED, the proposal lands in "Pending
+  approvals" with a copy-paste `--approve <run_id>:<index>` command. The
+  re-check uses the *current* brand config and audit context, so a 30%
+  change on Tuesday may pass on its own by Friday.
+- **Exit codes**: 0 ok · 2 brand config bad · 3 no platforms enabled · 4
+  audit crashed · 5 Telegram unreachable · 6 Telegram send failed · 7 every
+  enabled platform errored · 8 `--approve` spec malformed · 9 `--approve`
+  row not found · 10 `--approve` re-check still APPROVAL · 11 `--approve`
+  dispatch failed.
 
 ## 7. Things still on Michiel's plate
 

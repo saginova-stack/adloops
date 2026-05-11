@@ -35,12 +35,16 @@ from typing import Any
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from scripts import (  # type: ignore
-        audit, brand_loader, executors, guardrails, mutations, paths, telegram_report,
+        audit, brand_loader, executors, guardrails, mutations, paths,
+        recommender, telegram_report,
     )
     from scripts.brand_loader import BrandConfigError  # type: ignore
     from scripts.guardrails import Decision  # type: ignore
 else:
-    from . import audit, brand_loader, executors, guardrails, mutations, paths, telegram_report
+    from . import (
+        audit, brand_loader, executors, guardrails, mutations, paths,
+        recommender, telegram_report,
+    )
     from .brand_loader import BrandConfigError
     from .guardrails import Decision
 
@@ -342,6 +346,14 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:  # noqa: BLE001 — never let mutations crash the run
             tb = traceback.format_exc()
             print(f"[adloops] mutation pipeline crashed: {e}\n{tb[:1500]}", file=sys.stderr)
+
+    # 4b) Upgrade recommendations to the LLM chain when a key is available.
+    # Falls back to the rule-based section silently if no key is set or the
+    # LLM call errors — never blanks the section.
+    try:
+        report.recommendations = recommender.recommendations(report, brand)
+    except Exception as e:  # noqa: BLE001
+        print(f"[adloops] recommender crashed (keeping rule-based fallback): {e}", file=sys.stderr)
 
     # 5) Snapshot — only persist if at least one platform actually fetched, so
     # a totally creds-less run doesn't poison the diff baseline.

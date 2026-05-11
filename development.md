@@ -143,17 +143,79 @@ Skill symlinked: `/home/ubuntu/.openclaw/workspace/skills/adloops -> /home/ubunt
 
 ---
 
-## Phase 2 — guardrailed Meta + Google mutations (planned, not yet built)
+## Phase 2 — guardrailed Meta + Google mutations ✅
 
-See [`RESUME.md`](./RESUME.md) for the next-actions list. High-level shape:
+**Commits:**
+- `7f43f7f` — mutation proposer (`scripts/mutations.py`)
+- `d308e85` — synchronous MCP stdio client (`scripts/mcp_runner.py`)
+- `9288418` — Google + Meta executors (`scripts/executors/`)
+- `9a44ad7` — wired into `run.py` + `--approve` mode + report renderer rewrite
+- *(latest)* — LLM recommender chain (`scripts/recommender.py`) + docs
 
-1. Wire the kLOsk/adloop MCP and the Meta Marketing API into mutation paths inside a new `scripts/mutations.py` module.
-2. Every mutation goes through `guardrails.check_mutation()` first; only `Decision.AUTO` results execute. `APPROVAL` rows feed the "Pending approvals" section of the report. `REJECTED` rows write to the audit log and surface in the report's pending list with the rule that caught them.
-3. Add LLM-driven recommendations: ask Claude (or Nemotron via OpenRouter if `OPENROUTER_API_KEY` is set) to read the audit deltas and propose 3–5 actions. Recommendations remain non-mutating in Phase 2 — they go in the report only.
-4. Add a `--approve <run_id>:<mutation_index>` CLI mode so the operator can replay a single approval-required mutation from a prior run.
-5. New tests: mutation dry-runs, guardrail-blocked paths, audit-log replay.
+**Date:** 2026-05-11.
+**Test status:** 148 passing.
 
-LinkedIn mutations (Phase 3) blocked on Marketing Developer Platform approval (1–5 day SLA from LinkedIn).
+### What ships
+
+| Module | Purpose |
+|--------|---------|
+| `scripts/mutations.py` | Pure `propose(report, brand) → list[Mutation]`. Three rules: pause zombies (≥$50 spend + 0 conv), decrease budget −cap% on CPA spike (≥50% growth), increase budget +cap% on CPA drop (≥25% drop + conversion lift). Capped at 10 proposals/run; one mutation per campaign max. |
+| `scripts/mcp_runner.py` | Hand-rolled synchronous JSON-RPC stdio client for MCP servers. Handles initialize handshake, tools/call, isError responses, unsolicited notifications mid-flight, early stream close. IO is injectable so tests use BytesIO instead of spawning. |
+| `scripts/executors/google.py` | `GoogleExecutor` context manager — spawns the adloop MCP once and reuses the session across mutations in the same run. Dispatches via the adloop preview/confirm pattern: `pause_entity` / `enable_entity` / `update_campaign` → `confirm_and_apply`. dry_run propagates to confirm_and_apply (and adloop's own `safety.require_dry_run` config override is preserved). |
+| `scripts/executors/meta.py` | Direct Marketing Graph API. No native preview — dry_run mode returns the would-be HTTP call. Budget changes encoded as cents per Meta's wire format. |
+| `scripts/executors/__init__.py` | `dispatch(mutation, dry_run=False)` routes by platform. LinkedIn raises a clear "Phase 3 — blocked on MDP approval" error. |
+| `scripts/recommender.py` | LLM chain for the recommendations section: OpenRouter (Nemotron 3 Super free tier) → Anthropic (Claude Haiku) → rule-based fallback. Each LLM call is wrapped in try/except so a 5xx never blanks the section. Prompt is token-conservative (~600 tokens): brand voice, per-platform totals, top movers, GA4 cross-reference flags. |
+| `scripts/run.py` | New mutation pipeline between audit and report: propose → guardrails → dispatch AUTO (Google batched on one session, Meta per call) → queue APPROVAL → log REJECTED. New CLI flags: `--no-mutate`, `--approve <run_id>:<index>`. |
+| `scripts/telegram_report.py` | New "Actions taken" row renderer with applied/dry-run/failed states + $before → $after for budget changes. Pending approvals now include the exact copy-paste `--approve` command. |
+
+### Phase 2 design decisions
+
+1. **Hand-rolled MCP client over the `mcp` PyPI package.** Saves the async surface (we run synchronously per cron) and ~150kB of dependencies. Wire protocol is small enough that a synchronous JSON-RPC implementation is ~150 lines. Tests inject byte streams instead of spawning subprocesses, which makes the test suite hermetic.
+2. **One MCP session per Google batch.** kLOsk/adloop spawns take a few seconds (uv warmup + OAuth refresh). With cap=10 mutations per run that's a meaningful saving. The `GoogleExecutor` context manager owns the lifecycle; for one-offs (or `--approve`) the module-level `dispatch()` helper spawns and tears down.
+3. **APPROVAL surface via the report.** Each pending approval lands in the Telegram message with its exact `--approve <run_id>:<index>` command. Operator copy-pastes; the re-check uses current brand config (a 30% change on Tuesday might be 18% on Friday and clear the cap on its own).
+4. **Cross-platform ceiling computed per-mutation, not aggregated.** `projected_total_spend(report, [m])` computes the projected total if just this mutation applied. We don't accumulate AUTO decisions for the ceiling check — the per-mutation cap rule fires first in almost every realistic case. If this ever proves wrong we'll move to a two-pass model.
+5. **LLM degrades to rules silently.** Any exception from OpenRouter/Anthropic falls through to the rule-based recommender, no operator visibility needed — we'd rather a useful section than a "LLM unavailable" placeholder.
+6. **`--approve` re-runs guardrails against current config but skips the cross-platform ceiling.** The ceiling needs the full audit context which `--approve` doesn't reconstruct. Operators using `--approve` are explicitly opting in — the per-mutation cap is still enforced.
+7. **Mutation pipeline crashes don't crash the run.** A bug in proposer/executor still ships the audit + report. Failure surfaces on stderr.
+
+### Test coverage added in Phase 2
+
+| Module | Tests | Notes |
+|--------|-------|-------|
+| `mutations.py` | 16 | All three rules + edge cases (already-paused, no daily_budget, drop below threshold, conversions flat). Dedup (pause wins over budget change), max-per-run cap, skip-on-fetch-failure, projected_total with overrides + pauses. |
+| `mcp_runner.py` | 11 | Handshake order, idempotent initialize, missing protocolVersion, JSON-RPC error frames, mismatched response id, stream closed mid-request, unsolicited progress notifications, raw-text + JSON-text content unwrap. |
+| `executors/` | 17 | Google: pause/enable/budget_change tool routing, dry_run propagation, non-positive budget rejection, missing plan_id, unsupported kind, inactive session. Meta: pause/enable/budget cents encoding, dry_run path doesn't call HTTP, missing token, unsupported kind. Top-level: dispatcher routing + LinkedIn rejection. |
+| `run.py` Phase 2 cases | 9 | Mutations integration (proposer calls executor), --no-mutate flag, mutation crash doesn't crash run, APPROVAL queue, --approve invalid spec / not found / out of range / still-approval / now-auto-dispatches. |
+| `telegram_report.py` Phase 2 cases | 5 | Applied row, dry-run row, failed row with error, budget change detail rendering, pending approvals with `--approve` command. |
+| `recommender.py` | 9 | Fallback when no keys, OpenRouter happy path with auth header check, OpenRouter failure falls through to Anthropic, all LLMs fail falls through to rules, prompt contains brand voice + window + consent gap, bullet/numbered list parsing, max-recs cap, header line drop. |
+
+### Smoke tests run
+
+```bash
+# scaffold against /tmp
+ADLOOPS_BRAND_DIR=/tmp/adloops-smoke python -m scripts.run --scaffold
+# dry run with one platform enabled (no creds) → exit 7 with structured error report
+ADLOOPS_BRAND_DIR=/tmp/adloops-smoke TELEGRAM_BOT_TOKEN=fake ADLOOPS_TELEGRAM_CHAT_ID=1 \
+  python -m scripts.run --dry-run
+```
+
+Not smoke-tested (no creds):
+- Live adloop MCP spawn + `confirm_and_apply` — only the wire protocol is verified by unit tests.
+- Live Meta Graph mutation POST — same.
+- Live OpenRouter / Anthropic call — request shape verified with canned HTTP responses.
+
+---
+
+## Phase 3 — LinkedIn mutations (blocked)
+
+---
+
+Mirror of the Meta executor in `scripts/executors/linkedin.py`. The
+vendored MCP (`danielpopamd/linkedin-ads-mcp`) is already installed by
+`install.sh` and the `executors.dispatch` router already raises a clear
+"Phase 3 — blocked on MDP approval" error for LinkedIn — flipping that
+to a real executor is a single file change plus tests once the LinkedIn
+Marketing Developer Platform approval lands (1–5 day SLA).
 
 ---
 
