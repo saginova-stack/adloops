@@ -21,23 +21,21 @@ adloops/
 │   │   ├── brand.schema.json
 │   │   └── brand.example.json
 │   └── mcp-servers/        ← vendored submodules
-│       ├── google-ads/     → kLOsk/adloop @ v0.7.0
+│       ├── adloop/         → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
 │       └── linkedin-ads/   → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                  ← 56 tests covering guardrails, brand, audit, report, entrypoint
-├── setup.md                ← operator-facing setup
+├── tests/                  ← unit tests covering guardrails, brand, audit, report, entrypoint
+├── install.sh              ← one-shot first-run install (uv + submodule build + venv)
+├── setup.md                ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt
 ```
 
 ## Quick start
 
 ```bash
-git submodule update --init
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pytest tests/ -q          # 56 passing
-.venv/bin/python -m scripts.run --scaffold   # creates ~/Syncthing/adloops-brand
-# fill in brand.json, then:
-.venv/bin/python -m scripts.run --dry-run    # prints to stdout, no Telegram
+./install.sh                                  # installs uv, syncs submodules, builds, sets up .venv, runs tests
+.venv/bin/python -m scripts.run --scaffold    # creates ~/Syncthing/adloops-brand
+# fill in brand.json + wire creds (see setup.md §3), then:
+.venv/bin/python -m scripts.run --dry-run     # prints to stdout, no Telegram
 ```
 
 See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.

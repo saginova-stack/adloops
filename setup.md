@@ -9,17 +9,40 @@ Read-only audit of Google / Meta / LinkedIn ads, every Tuesday and Friday at
 09:00 local, posted to Telegram via the existing OpenClaw bot. Mutations
 (±20% cap) come in Phase 2; LinkedIn mutations in Phase 3.
 
-## 1. Bootstrap
+Phase 1 also pulls **GA4 sessions and conversions for paid Google traffic**
+and joins them with Google Ads metrics — the report flags consent gaps
+(common in EU traffic) and Ads-vs-GA4 attribution discrepancies per
+campaign. This is the cross-reference value that comes from the vendored
+`kLOsk/adloop` MCP, computed in our own Python code in Phase 1 for cron
+determinism (the MCP itself becomes the write path in Phase 2).
+
+## 1. First-run install
+
+There is **one command** that prepares everything:
 
 ```bash
 cd /home/ubuntu/adloops
-git submodule update --init   # vendored MCP servers
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/pytest tests/ -q
+./install.sh
 ```
 
-All tests pass before you continue. If they don't, stop.
+This script:
+
+1. Initializes git submodules (`mcp-servers/adloop`, `mcp-servers/linkedin-ads`).
+2. Installs `uv` if it isn't already on PATH (via Astral's official installer).
+3. `uv sync` in `mcp-servers/adloop` — pulls Google Ads + GA4 Python deps.
+4. `npm install && npm run build` in `mcp-servers/linkedin-ads` — compiles the TypeScript.
+5. Creates `.venv/` and installs `requirements.txt` for the skill itself.
+6. Runs the test suite as a sanity check.
+
+It is idempotent — safe to re-run after pulling new submodule SHAs.
+
+What it does *not* do (intentionally — these need interactive input):
+
+- Run the OAuth wizards for Google / LinkedIn.
+- Create the brand directory or `brand.json`.
+- Install a cron entry.
+
+Those four steps are below.
 
 ## 2. Brand directory
 
@@ -42,20 +65,27 @@ before running an audit** — the loader rejects empty `icp.personas`.
 
 You need at least one of these to get a non-empty report.
 
-### Google Ads
+### Google Ads + GA4 (one combined OAuth flow)
 
-Apply for a developer token: https://developers.google.com/google-ads/api/docs/get-started/dev-token
+The vendored `kLOsk/adloop` MCP bundles a wizard that handles both Google Ads
+*and* Google Analytics 4 in one OAuth dance — the same wizard the upstream MCP
+uses interactively.
 
-Then create OAuth credentials at https://console.cloud.google.com/apis/credentials.
-The `adloop` MCP we vendored has a built-in `adloop init` wizard that walks you
-through the OAuth dance — easiest path:
+**Step 1 — apply for a Google Ads developer token:**
+https://developers.google.com/google-ads/api/docs/get-started/dev-token
+(New tokens start as "Test"; you'll need at least "Explorer" to see
+production data — it's granted automatically after your first API call.)
+
+**Step 2 — run the wizard:**
 
 ```bash
-cd skill/mcp-servers/google-ads
-uv sync && uv run adloop init
+cd skill/mcp-servers/adloop
+uv run adloop init
 ```
 
-When done, copy the values into your `.env`:
+It opens a browser, walks through Google Cloud project + OAuth + GA4 property
+selection, and writes its config to `~/.config/adloop/config.yaml`. Copy the
+relevant values to your `.env` (the wizard prints them at the end):
 
 ```
 GOOGLE_ADS_DEVELOPER_TOKEN=...
@@ -64,7 +94,18 @@ GOOGLE_ADS_CLIENT_SECRET=...
 GOOGLE_ADS_REFRESH_TOKEN=...
 GOOGLE_ADS_LOGIN_CUSTOMER_ID=1234567890   # MCC if applicable, else operating account
 GOOGLE_ADS_CUSTOMER_ID=1234567890         # operating account, if different from login
+GA4_PROPERTY_ID=987654321                 # numeric, e.g. from GA4 → Admin → Property
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
+
+**Note on GA4 auth.** GA4 supports OAuth user credentials (what the wizard
+sets up) but a service-account JSON is more reliable for a cron context — it
+doesn't expire. To create one: Google Cloud Console → APIs & Services →
+Credentials → Create service account → grant it the **Viewer** role on the
+GA4 property (GA4 → Admin → Property Access Management → add by email). Then
+download the JSON and point `GOOGLE_APPLICATION_CREDENTIALS` at it.
+
+If both are set, the service account wins.
 
 ### Meta Ads
 
@@ -86,11 +127,11 @@ If Meta ships a stable MCP shim later, swap it into `skill/mcp-servers/meta-ads/
 1. Apply for the **Marketing Developer Platform — Advertising API** product
    at https://www.linkedin.com/developers/apps. Approval takes 1–5 business
    days. **Start this now if you haven't.**
-2. Once approved, create an app, then run the auth CLI in the vendored MCP:
+2. Once approved, create an app, then run the auth CLI in the vendored MCP
+   (already built by `install.sh`):
 
 ```bash
 cd skill/mcp-servers/linkedin-ads
-npm install && npm run build
 node dist/auth-cli.js
 ```
 
@@ -154,7 +195,10 @@ cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
 ## 7. Things still on Michiel's plate
 
 - [ ] LinkedIn MDP application submitted (1–5 day approval)
-- [ ] Google Ads developer token applied for + OAuth refresh token captured
+- [ ] Google Ads developer token applied for
+- [ ] OAuth + GA4 wizard run (`uv run adloop init` in `mcp-servers/adloop`)
+- [ ] GA4 service-account JSON created and `GOOGLE_APPLICATION_CREDENTIALS` set (preferred over OAuth for cron)
+- [ ] GA4 property granted Viewer access to the service account
 - [ ] Meta Marketing API system user token captured
 - [ ] `ADLOOPS_TELEGRAM_CHAT_ID` set in OC env
 - [ ] ICP filled into `brand.json`

@@ -17,6 +17,9 @@ metadata:
           "GOOGLE_ADS_CLIENT_SECRET",
           "GOOGLE_ADS_REFRESH_TOKEN",
           "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
+          "GOOGLE_ADS_CUSTOMER_ID",
+          "GA4_PROPERTY_ID",
+          "GOOGLE_APPLICATION_CREDENTIALS",
           "META_ACCESS_TOKEN",
           "META_AD_ACCOUNT_ID",
           "LINKEDIN_ACCESS_TOKEN",
@@ -91,9 +94,13 @@ Every mutation — proposed, applied, or rejected — writes one JSONL line to `
 
 ## Vendored MCP servers
 
-`mcp-servers/google-ads` is `kLOsk/adloop@v0.7.0` (MIT). `mcp-servers/linkedin-ads` is `danielpopamd/linkedin-ads-mcp@05a2761` (MIT). Phase 1 reads via direct API calls in `scripts/mcp_clients.py` — the vendored MCP servers will become the canonical write path in Phase 2 because the kLOsk preview/confirm pattern matches our guardrail flow exactly.
+`mcp-servers/adloop` is `kLOsk/adloop@v0.7.0` (MIT) — a *combined* Google Ads + GA4 MCP server with cross-reference tools (`analyze_campaign_conversions`, `landing_page_analysis`, `attribution_check`). `mcp-servers/linkedin-ads` is `danielpopamd/linkedin-ads-mcp@05a2761` (MIT).
+
+Phase 1 calls Google Ads and GA4 via their Python SDKs directly (deterministic, no subprocess) and computes the cross-reference join itself — the report surfaces consent gap and attribution discrepancy signals. The vendored MCP servers become the canonical write path in Phase 2 because the kLOsk preview/confirm pattern matches our guardrail flow exactly.
 
 Meta has no public MCP shim (the official Meta Ads CLI announced April 2026 is CLI-only); we hit the Marketing Graph API directly via the same auth Meta's CLI uses.
+
+Run `./install.sh` from the repo root for the one-time setup that prepares both vendored MCPs (installs uv, runs `uv sync` on adloop, `npm install && npm run build` on the LinkedIn MCP).
 
 ## What's NOT in Phase 1
 

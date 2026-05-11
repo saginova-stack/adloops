@@ -1,5 +1,5 @@
-[submodule "google-ads"]
-	path = skill/mcp-servers/google-ads
+[submodule "adloop"]
+	path = skill/mcp-servers/adloop
 	url = https://github.com/kLOsk/adloop.git
 [submodule "linkedin-ads"]
 	path = skill/mcp-servers/linkedin-ads
