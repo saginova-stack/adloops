@@ -214,3 +214,91 @@ def test_tracking_section_only_flags_google_campaigns():
     r = make_report(platforms=[meta_pr])
     out = "\n\n".join(render_report(r))
     assert "Tracking & consent:" not in out
+
+
+# ---- Phase 2 action rendering ---------------------------------------------
+
+def _action_row(*, applied=False, dry_run=False, error=None, kind="pause",
+                platform="google", name="Zombie", before=None, after=None):
+    return {
+        "decision": "auto",
+        "rule": "x",
+        "explanation": "exp",
+        "mutation": {
+            "platform": platform,
+            "campaign_id": "C1",
+            "campaign_name": name,
+            "kind": kind,
+            "before": before or {"status": "ENABLED"},
+            "after": after or {"status": "PAUSED"},
+            "reason": "r",
+        },
+        "applied": applied,
+        "dry_run": dry_run,
+        "error": error,
+    }
+
+
+def test_actions_taken_renders_applied_row():
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        actions_taken=[_action_row(applied=True)],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "Actions taken:" in out
+    assert "Zombie" in out
+    assert "applied" in out
+    assert "ENABLED → PAUSED" in out
+
+
+def test_actions_taken_renders_dry_run_row():
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        actions_taken=[_action_row(dry_run=True)],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "preview only" in out and "dry-run" in out
+
+
+def test_actions_taken_renders_failed_row():
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        actions_taken=[_action_row(applied=False, error="MCPToolError: not found")],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "FAILED" in out and "not found" in out
+
+
+def test_actions_taken_renders_budget_change_detail():
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        actions_taken=[_action_row(applied=True, kind="budget_change",
+                                   before={"daily_budget": 100.0},
+                                   after={"daily_budget": 80.0})],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "$100.00" in out and "$80.00" in out
+
+
+def test_pending_approvals_section_includes_approve_command():
+    approval = {
+        "decision": "approval",
+        "rule": "budget_pct_cap",
+        "explanation": "Budget change +35.0% exceeds the ±20% per-run cap (100 → 135).",
+        "mutation": {
+            "platform": "google", "campaign_id": "X", "campaign_name": "Search Brand",
+            "kind": "budget_change",
+            "before": {"daily_budget": 100.0}, "after": {"daily_budget": 135.0},
+            "reason": "Conversions up 80%",
+        },
+    }
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        pending_approvals=[approval],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "Pending approvals:" in out
+    assert "Search Brand" in out
+    # The instruction should include the actual --approve command shape
+    assert "--approve" in out
+    assert f"{r.run_id}:0" in out

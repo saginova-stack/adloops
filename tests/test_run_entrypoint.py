@@ -147,3 +147,228 @@ def test_all_platforms_failed_returns_7(tmp_path, monkeypatch):
                         lambda msgs, dry_run=False: [])
     rc = run_mod.main(["--dry-run"])
     assert rc == 7
+
+
+# ---- Phase 2: mutation pipeline integration ------------------------------
+
+from scripts.guardrails import Decision, GuardrailResult, Mutation
+from scripts.mcp_clients import CampaignPerf
+
+
+def _report_with_zombie() -> AuditReport:
+    """Stub report with one campaign that the proposer will pause."""
+    camp = CampaignPerf(
+        platform="google", campaign_id="ZOMBIE", campaign_name="Zombie Campaign",
+        status="ENABLED", daily_budget=50.0,
+        spend=300.0, impressions=10000, clicks=200, conversions=0.0, revenue=None,
+    )
+    return AuditReport(
+        run_id="20260510T090000Z", generated_at="2026-05-10T09:00:00Z",
+        window_start="2026-05-03", window_end="2026-05-09",
+        platforms=[PlatformResult("google", True, True, None, [camp])],
+        deltas=[],
+        top_movers_best=[], top_movers_worst=[],
+        actions_taken=[], pending_approvals=[], recommendations=[],
+    )
+
+
+def test_mutations_run_and_populate_actions_taken(tmp_path, monkeypatch):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: _report_with_zombie())
+    monkeypatch.setattr(run_mod.audit, "write_snapshot", lambda r: bdir / "campaigns" / ".archive" / "x.json")
+    monkeypatch.setattr(run_mod.telegram_report, "send_messages",
+                        lambda msgs, dry_run=False: [])
+
+    dispatched: list = []
+
+    class FakeEx:
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+        def dispatch(self, m, *, dry_run):
+            dispatched.append((m.kind, m.campaign_id, dry_run))
+            return {"status": "APPLIED" if not dry_run else "DRY_RUN"}
+
+    monkeypatch.setattr(run_mod.executors.google, "GoogleExecutor", FakeEx)
+    rc = run_mod.main(["--dry-run"])
+    assert rc == 0
+    assert dispatched == [("pause", "ZOMBIE", True)]
+
+
+def test_no_mutate_flag_skips_mutation_pipeline(tmp_path, monkeypatch):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: _report_with_zombie())
+    monkeypatch.setattr(run_mod.audit, "write_snapshot", lambda r: bdir / "x.json")
+    monkeypatch.setattr(run_mod.telegram_report, "send_messages",
+                        lambda msgs, dry_run=False: [])
+
+    called = {"flag": False}
+
+    def boom(*a, **kw):
+        called["flag"] = True
+        raise AssertionError("mutations should not be proposed")
+
+    monkeypatch.setattr(run_mod.mutations, "propose", boom)
+    rc = run_mod.main(["--dry-run", "--no-mutate"])
+    assert rc == 0
+    assert called["flag"] is False
+
+
+def test_mutation_crash_does_not_crash_run(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: _report_with_zombie())
+    monkeypatch.setattr(run_mod.audit, "write_snapshot", lambda r: bdir / "x.json")
+    monkeypatch.setattr(run_mod.telegram_report, "send_messages",
+                        lambda msgs, dry_run=False: [])
+
+    def boom(report, brand):
+        raise RuntimeError("mutation proposer exploded")
+
+    monkeypatch.setattr(run_mod.mutations, "propose", boom)
+    rc = run_mod.main(["--dry-run"])
+    assert rc == 0  # run still completes — audit + report still useful
+    err = capsys.readouterr().err
+    assert "mutation pipeline crashed" in err
+
+
+def test_approval_decision_populates_pending_list(tmp_path, monkeypatch):
+    """A budget change above the cap → APPROVAL → not dispatched, queued."""
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+
+    # Stub report has a campaign with CPA growth that would trigger budget change.
+    from scripts.audit import CampaignDelta
+    camp = CampaignPerf(
+        platform="google", campaign_id="C1", campaign_name="C1",
+        status="ENABLED", daily_budget=100.0,
+        spend=300.0, impressions=1000, clicks=50, conversions=3.0, revenue=None,
+    )
+    delta = CampaignDelta(
+        platform="google", campaign_id="C1", campaign_name="C1",
+        spend_now=300.0, spend_prev=150.0, spend_change_pct=100.0,
+        cpa_now=100.0, cpa_prev=30.0,
+        conversions_now=3.0, conversions_prev=5.0,
+    )
+    report = AuditReport(
+        run_id="R1", generated_at="2026-05-10T09:00:00Z",
+        window_start="2026-05-03", window_end="2026-05-09",
+        platforms=[PlatformResult("google", True, True, None, [camp])],
+        deltas=[delta],
+        top_movers_best=[], top_movers_worst=[],
+        actions_taken=[], pending_approvals=[], recommendations=[],
+    )
+    monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: report)
+    monkeypatch.setattr(run_mod.audit, "write_snapshot", lambda r: bdir / "x.json")
+    monkeypatch.setattr(run_mod.telegram_report, "send_messages",
+                        lambda msgs, dry_run=False: [])
+
+    # Force the budget change to be 30% (above the 20% cap) by stubbing the
+    # proposer to emit one we control.
+    def fake_propose(rep, brand):
+        return [Mutation(
+            platform="google", campaign_id="C1", campaign_name="C1",
+            kind="budget_change",
+            before={"daily_budget": 100.0}, after={"daily_budget": 70.0},  # -30%
+            reason="forced for test",
+        )]
+
+    monkeypatch.setattr(run_mod.mutations, "propose", fake_propose)
+
+    # Make sure no executor would ever fire — APPROVAL should never dispatch.
+    def must_not_call(*a, **kw):
+        raise AssertionError("APPROVAL must not dispatch executor")
+
+    monkeypatch.setattr(run_mod.executors.google, "GoogleExecutor",
+                        lambda: type("X", (), {"__enter__": lambda s: must_not_call(),
+                                               "__exit__": lambda *a: None})())
+
+    rc = run_mod.main(["--dry-run"])
+    assert rc == 0
+    assert len(report.pending_approvals) == 1
+    assert report.pending_approvals[0]["decision"] == "approval"
+
+
+# ---- --approve mode ------------------------------------------------------
+
+def _seed_audit_log_with_approval(bdir, run_id="RUN_X", kind="pause", before=None, after=None):
+    log = bdir / "campaigns" / ".audit.jsonl"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    rows = [
+        {"run_id": run_id, "decision": "auto", "platform": "google",
+         "campaign_id": "A", "campaign_name": "A", "kind": "pause",
+         "before": {}, "after": {}, "reason": "", "rule": "x", "applied": True},
+        {"run_id": run_id, "decision": "approval", "platform": "google",
+         "campaign_id": "B", "campaign_name": "B", "kind": kind,
+         "before": before or {"status": "PAUSED"}, "after": after or {"status": "ENABLED"},
+         "reason": "queued", "rule": "x", "applied": False},
+    ]
+    log.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    return log
+
+
+def test_approve_invalid_spec_format(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    rc = run_mod.main(["--approve", "no-colon"])
+    assert rc == 8
+    err = capsys.readouterr().err
+    assert "RUN_ID:INDEX" in err.upper() or "run_id" in err
+
+
+def test_approve_run_not_in_log(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    _seed_audit_log_with_approval(bdir, run_id="RUN_X")
+    rc = run_mod.main(["--approve", "OTHER_RUN:0"])
+    assert rc == 9
+    assert "APPROVAL rows" in capsys.readouterr().err
+
+
+def test_approve_index_out_of_range(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    _seed_audit_log_with_approval(bdir, run_id="RUN_X")
+    rc = run_mod.main(["--approve", "RUN_X:5"])  # only one APPROVAL row
+    assert rc == 9
+    assert "out of range" in capsys.readouterr().err
+
+
+def test_approve_recheck_still_approval_does_not_dispatch(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    # Seed an "enable" approval — guardrails always returns APPROVAL for enable
+    _seed_audit_log_with_approval(bdir, run_id="RUN_X", kind="enable",
+                                  before={"status": "PAUSED"}, after={"status": "ENABLED"})
+
+    called = {"flag": False}
+
+    def must_not_call(*a, **kw):
+        called["flag"] = True
+        raise AssertionError("dispatch must not be called")
+
+    monkeypatch.setattr(run_mod.executors, "dispatch", must_not_call)
+    rc = run_mod.main(["--approve", "RUN_X:0"])
+    assert rc == 10
+    assert called["flag"] is False
+    assert "approval" in capsys.readouterr().err.lower()
+
+
+def test_approve_recheck_auto_dispatches(tmp_path, monkeypatch, capsys):
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+    # Seed a "pause" approval — pause is always AUTO via guardrails, so the
+    # re-check will pass and dispatch should fire.
+    _seed_audit_log_with_approval(bdir, run_id="RUN_X", kind="pause",
+                                  before={"status": "ENABLED"}, after={"status": "PAUSED"})
+
+    dispatched = []
+    monkeypatch.setattr(run_mod.executors, "dispatch",
+                        lambda m, dry_run: dispatched.append((m.campaign_id, dry_run)) or {"ok": True})
+
+    rc = run_mod.main(["--approve", "RUN_X:0", "--dry-run"])
+    assert rc == 0
+    assert dispatched == [("B", True)]
+    out = capsys.readouterr().out
+    assert "Re-check passes" in out

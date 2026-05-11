@@ -87,6 +87,43 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+def _action_line(a: dict) -> str:
+    """Format one row from `actions_taken`. The dict is the output of
+    `guardrails.serialize_result()` augmented with `applied` / `dry_run` /
+    `result` / `error` by the run.py mutation pipeline.
+    """
+    mut = a.get("mutation", {})
+    plat = mut.get("platform", "?")
+    name = mut.get("campaign_name", mut.get("campaign_id", "?"))
+    kind = mut.get("kind", "?")
+    if a.get("error"):
+        suffix = f"FAILED — {a['error']}"
+    elif a.get("dry_run"):
+        suffix = "preview only (dry-run)"
+    elif a.get("applied"):
+        suffix = "applied"
+    else:
+        suffix = a.get("explanation", "")
+    # Include the change body for budget_change / status flips so the operator
+    # sees what actually moved.
+    detail = _action_detail(mut)
+    detail_str = f" — {detail}" if detail else ""
+    return f"  • [{_platform_emoji(plat)}] {name}: {kind}{detail_str} ({suffix})"
+
+
+def _action_detail(mut: dict) -> str:
+    kind = mut.get("kind")
+    before = mut.get("before", {}) or {}
+    after = mut.get("after", {}) or {}
+    if kind == "budget_change":
+        b = before.get("daily_budget")
+        a = after.get("daily_budget")
+        return f"daily_budget {_fmt_money(b) if b is not None else '—'} → {_fmt_money(a) if a is not None else '—'}"
+    if kind in ("pause", "enable"):
+        return f"{before.get('status', '?')} → {after.get('status', '?')}"
+    return ""
+
+
 # Thresholds for surfacing cross-reference flags. Tuned to match the kLOsk
 # adloop tool defaults: consent gaps above ~30% are typically GDPR-driven
 # (normal EU traffic floor), attribution gaps above 25% usually mean either
@@ -173,21 +210,24 @@ def render_report(r: AuditReport) -> list[str]:
     if r.actions_taken:
         lines = ["Actions taken:"]
         for a in r.actions_taken:
-            lines.append(
-                f"  • [{_platform_emoji(a['platform'])}] {a['campaign_name']}: "
-                f"{a['kind']} — {a.get('explanation', '')}"
-            )
+            lines.append(_action_line(a))
         sections.append("\n".join(lines))
     else:
-        sections.append("Actions taken: none (read-only run)")
+        sections.append("Actions taken: none (no mutations proposed this run)")
 
     # 6) Pending approvals
     if r.pending_approvals:
         lines = ["Pending approvals:"]
         for a in r.pending_approvals:
+            mut = a.get("mutation", {})
+            plat = mut.get("platform", "?")
+            name = mut.get("campaign_name", mut.get("campaign_id", "?"))
+            kind = mut.get("kind", "?")
+            explanation = a.get("explanation", "")
             lines.append(
-                f"  • [{_platform_emoji(a['platform'])}] {a['campaign_name']}: "
-                f"{a['kind']} — {a.get('explanation', '')} (run {r.run_id})"
+                f"  • [{_platform_emoji(plat)}] {name}: {kind} — {explanation} "
+                f"(approve with: python -m scripts.run --approve {r.run_id}:"
+                f"{r.pending_approvals.index(a)})"
             )
         sections.append("\n".join(lines))
 
