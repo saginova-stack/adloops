@@ -1,6 +1,6 @@
 ---
 name: adloops
-description: "Twice-weekly audit and tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, and posts a structured report to Telegram. Phase 2+ adds guardrailed mutations (±20% budget cap, new campaigns paused). Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, or apply auto-pilot tweaks within hard guardrails."
+description: "Twice-weekly audit and guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, joins Google Ads with GA4 to flag consent gaps and attribution discrepancies, proposes mutations within a ±20% budget cap (pause zombies, scale winners, slow CPA spikes), and posts a structured report to Telegram. LinkedIn reads work today; LinkedIn mutations land in Phase 3 once Marketing Developer Platform approval comes through. Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, or apply auto-pilot tweaks within hard guardrails."
 metadata:
   {
     "openclaw": {
@@ -107,7 +107,9 @@ Every mutation — proposed, applied, or rejected — writes one JSONL line to `
 
 `mcp-servers/adloop` is `kLOsk/adloop@v0.7.0` (MIT) — a *combined* Google Ads + GA4 MCP server with cross-reference tools (`analyze_campaign_conversions`, `landing_page_analysis`, `attribution_check`). `mcp-servers/linkedin-ads` is `danielpopamd/linkedin-ads-mcp@05a2761` (MIT).
 
-Phase 1 calls Google Ads and GA4 via their Python SDKs directly (deterministic, no subprocess) and computes the cross-reference join itself — the report surfaces consent gap and attribution discrepancy signals. The vendored MCP servers become the canonical write path in Phase 2 because the kLOsk preview/confirm pattern matches our guardrail flow exactly.
+Reads use direct Python SDKs (Google Ads, GA4 Data, Meta Marketing Graph, LinkedIn REST) — deterministic, no subprocess, cron-friendly. The audit computes the GA4 cross-reference join itself in Python; the report surfaces consent gap and attribution discrepancy signals.
+
+Writes go through the vendored MCPs. Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph (no public MCP shim exists). LinkedIn writes are wired but locked behind Phase 3.
 
 Meta has no public MCP shim (the official Meta Ads CLI announced April 2026 is CLI-only); we hit the Marketing Graph API directly via the same auth Meta's CLI uses.
 

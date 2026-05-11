@@ -1,31 +1,37 @@
 # AdLoops
 
-Twice-weekly audit + tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
+Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
 
-> Phase 1 is read-only. Mutations (with hard ±20% budget guardrails) ship in Phase 2. LinkedIn mutations in Phase 3.
+> Phase 1 (read-only audit + GA4 cross-reference) and Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations) shipped. LinkedIn mutations (Phase 3) blocked on Marketing Developer Platform approval.
 
 ## Layout
 
 ```
 adloops/
-├── skill/                  ← the actual skill — symlinked into OC's skills dir
+├── skill/                       ← the actual skill — symlinked into OC's skills dir
 │   ├── SKILL.md
 │   ├── scripts/
-│   │   ├── run.py          ← entrypoint (`python -m scripts.run`)
-│   │   ├── audit.py
+│   │   ├── run.py               ← entrypoint (`python -m scripts.run`)
+│   │   ├── audit.py             ← fetch-all → diff → top movers → GA4 cross-ref → snapshot
 │   │   ├── brand_loader.py
-│   │   ├── guardrails.py   ← hard rules, fully tested, wired in Phase 2
-│   │   ├── mcp_clients.py  ← Google / Meta / LinkedIn read clients
+│   │   ├── guardrails.py        ← hard rules + audit log, wired in front of every mutation
+│   │   ├── mcp_clients.py       ← Google / Meta / LinkedIn read clients + GA4 enrichment
+│   │   ├── mutations.py         ← proposer: pause zombies, ±cap% on CPA spike/drop
+│   │   ├── mcp_runner.py        ← synchronous MCP stdio JSON-RPC client
+│   │   ├── executors/
+│   │   │   ├── google.py        ← adloop MCP preview/confirm
+│   │   │   └── meta.py          ← Marketing Graph API direct
+│   │   ├── recommender.py       ← OpenRouter → Anthropic → rule-based chain
 │   │   └── telegram_report.py
 │   ├── references/
 │   │   ├── brand.schema.json
 │   │   └── brand.example.json
-│   └── mcp-servers/        ← vendored submodules
-│       ├── adloop/         → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
-│       └── linkedin-ads/   → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                  ← unit tests covering guardrails, brand, audit, report, entrypoint
-├── install.sh              ← one-shot first-run install (uv + submodule build + venv)
-├── setup.md                ← operator-facing setup (creds, cron, exit codes)
+│   └── mcp-servers/             ← vendored submodules
+│       ├── adloop/              → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
+│       └── linkedin-ads/        → danielpopamd/linkedin-ads-mcp @ 05a2761
+├── tests/                       ← 148 tests covering every module
+├── install.sh                   ← one-shot first-run install (uv + submodule build + venv)
+├── setup.md                     ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt
 ```
 
@@ -35,14 +41,23 @@ adloops/
 ./install.sh                                  # installs uv, syncs submodules, builds, sets up .venv, runs tests
 .venv/bin/python -m scripts.run --scaffold    # creates ~/Syncthing/adloops-brand
 # fill in brand.json + wire creds (see setup.md §3), then:
-.venv/bin/python -m scripts.run --dry-run     # prints to stdout, no Telegram
+.venv/bin/python -m scripts.run --dry-run     # audit + propose + show previews, no real changes, no Telegram
+```
+
+Run modes:
+
+```bash
+python -m scripts.run                         # full pipeline: audit, dispatch AUTO mutations, send to Telegram
+python -m scripts.run --dry-run               # no real side effects (executors run in preview mode)
+python -m scripts.run --no-mutate             # audit + report only (Phase 1 behaviour)
+python -m scripts.run --approve <run>:<idx>   # replay a queued APPROVAL row after re-checking guardrails
 ```
 
 See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.
 
 ## Phasing
 
-1. **Phase 1** — read-only audit + Telegram report. ✅ this build.
-2. **Phase 2** — guardrailed Meta + Google mutations. Wires `guardrails.py` into mutation code paths.
-3. **Phase 3** — LinkedIn mutations (after Marketing Developer Platform approval).
+1. **Phase 1** — read-only audit + GA4 cross-reference + Telegram report. ✅ shipped.
+2. **Phase 2** — guardrailed Google + Meta mutations, LLM-driven recommendations, `--approve` mode. ✅ shipped.
+3. **Phase 3** — LinkedIn mutations. ⏳ blocked on Marketing Developer Platform approval (1–5 day SLA from LinkedIn).
 4. **Phase 4** — creative generation. Out of scope for this repo.
