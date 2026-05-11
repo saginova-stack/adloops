@@ -7,9 +7,13 @@ guardrails, Syncthing-backed brand directory).
 
 ## Phase 1 — read-only audit + Telegram report ✅
 
-**Commit:** `e8d3a6a` ("Phase 1: read-only audit skill for Google / Meta / LinkedIn ads")
-**Date:** 2026-05-10
-**Test status:** 56/56 passing (`.venv/bin/pytest tests/ -q`)
+**Commits:**
+- `e8d3a6a` — initial Phase 1 (read-only audit, Telegram delivery, guardrails module unwired)
+- `8a57867` — rename `mcp-servers/google-ads` → `mcp-servers/adloop`, `install.sh`, GA4 env documented
+- *(this commit)* — GA4 cross-reference enrichment: consent gap, attribution gap, real CPA, new "Tracking & consent" report section
+
+**Date:** Phase 1 read-only landed 2026-05-10. GA4 cross-reference landed 2026-05-11.
+**Test status:** 81 passing (`.venv/bin/pytest tests/ -q`).
 
 ### What ships
 
@@ -25,8 +29,9 @@ guardrails, Syncthing-backed brand directory).
 | `skill/scripts/telegram_report.py` | Formats `AuditReport` into the spec'd 6-section Telegram message, splits ≤3000 chars per chunk, sends via `TELEGRAM_BOT_TOKEN`. |
 | `skill/references/brand.schema.json` | JSON Schema for `brand.json`. |
 | `skill/references/brand.example.json` | Filled-in example used as scaffold seed. |
-| `skill/mcp-servers/google-ads/` | Submodule → `kLOsk/adloop @ v0.7.0`. |
+| `skill/mcp-servers/adloop/` | Submodule → `kLOsk/adloop @ v0.7.0`. Combined Google Ads + GA4 MCP. |
 | `skill/mcp-servers/linkedin-ads/` | Submodule → `danielpopamd/linkedin-ads-mcp @ 05a2761` (no releases yet — pinned to commit SHA). |
+| `install.sh` | One-shot first-run bootstrap (uv install + adloop sync + LinkedIn build + skill venv). |
 | `tests/` | 56 tests across 5 test files. |
 | `setup.md` | Operator-facing setup: cred application, env vars, cron entry, exit codes. |
 | `README.md` | Repo-level overview + quick start. |
@@ -35,13 +40,15 @@ guardrails, Syncthing-backed brand directory).
 ### Design decisions worth keeping
 
 1. **Headless Python pipeline, not LLM-orchestrated.** The cron use case wants a deterministic process: fetch → diff → render → send. Putting an LLM in the hot path would make every run ~$0.05 and turn timeouts into bug reports. Phase 2 will use an LLM (or Nemotron via OpenRouter) for the *recommendations* section only — everything else stays deterministic.
-2. **Direct API calls in Phase 1, MCP servers in Phase 2.** The vendored MCPs (kLOsk/adloop, danielpopamd/linkedin-ads-mcp) are designed for an LLM client. For a one-shot read we don't need the MCP layer. They become the canonical *write* path in Phase 2 because their preview/confirm pattern matches our guardrail flow exactly.
-3. **No Meta MCP shim exists yet.** Meta announced an official Ads CLI on 2026-04-29; their blog post doesn't link a public repo and GitHub search returns nothing under `org:facebook`. Decision: hit the Marketing Graph API directly with the same `META_ACCESS_TOKEN` + `META_AD_ACCOUNT_ID` contract Meta's CLI uses. When/if Meta ships a stable MCP, swap it into `skill/mcp-servers/meta-ads/` — `mcp_clients.MetaAdsClient` is the only file that changes.
-4. **Skill installed via symlink.** `~/.openclaw/workspace/skills/adloops` → `~/adloops/skill/`. Lets us version the actual code in this repo while OC sees a normal skill directory. Submodules under `skill/mcp-servers/` are inside the symlinked tree, so the OC LLM sees them too.
-5. **Guardrail decisions are tristate, not binary.** `Decision.AUTO` / `APPROVAL` / `REJECTED`. The "queue for human approval" path is the safety valve that prevents the LLM from talking its way around hard rules — even if it argues 25% is fine, the cap kicks the request to APPROVAL not AUTO.
-6. **Snapshots are skipped on total-failure runs.** If every enabled platform errored, we don't write a snapshot, because a corrupt baseline poisons the next run's diff. Run exits with code 7 so the cron operator notices.
-7. **Audit log key is `run_id` set in env, not generated per call.** The entrypoint stamps `ADLOOPS_RUN_ID` in `os.environ` so every guardrail decision in that run logs the same id. Lets us reconstruct an entire run from `.audit.jsonl`.
-8. **Fail-loud, not fail-quiet, when brand.json is broken.** Loader raises `BrandConfigError`; entrypoint catches and routes to Telegram before exiting nonzero. Operator sees the message in the same place as a normal report.
+2. **Direct API calls in Phase 1, MCP servers in Phase 2 (hybrid).** The vendored MCPs (kLOsk/adloop, danielpopamd/linkedin-ads-mcp) are designed for an LLM client. For a one-shot read we don't need the MCP layer, so Phase 1 hits the Google Ads / GA4 / Meta / LinkedIn APIs directly and computes the cross-reference signals (consent gap, attribution gap, real CPA) ourselves. The vendored MCPs are still installed via `install.sh` and become the canonical *write* path in Phase 2 because their preview/confirm pattern matches our guardrail flow exactly. We get the cross-reference value now without paying the subprocess/auth-state cost at cron time.
+3. **GA4 is enrichment, not a platform.** GA4 is fetched only when Google Ads has a fetched result, and only enriches Google rows. If GA4 creds are missing or the API errors, we still report Google Ads numbers — the `PlatformResult.ga4_status` field surfaces *why* the cross-reference signals aren't available so the operator sees the gap.
+4. **Meta has no public MCP shim.** Meta announced an official Ads CLI on 2026-04-29; their blog post doesn't link a public repo and GitHub search returns nothing under `org:facebook`. Decision: hit the Marketing Graph API directly with the same `META_ACCESS_TOKEN` + `META_AD_ACCOUNT_ID` contract Meta's CLI uses. When/if Meta ships a stable MCP, swap it into `skill/mcp-servers/meta-ads/` — `mcp_clients.MetaAdsClient` is the only file that changes.
+5. **Skill installed via symlink.** `~/.openclaw/workspace/skills/adloops` → `~/adloops/skill/`. Lets us version the actual code in this repo while OC sees a normal skill directory. Submodules under `skill/mcp-servers/` are inside the symlinked tree, so the OC LLM sees them too.
+6. **Guardrail decisions are tristate, not binary.** `Decision.AUTO` / `APPROVAL` / `REJECTED`. The "queue for human approval" path is the safety valve that prevents the LLM from talking its way around hard rules — even if it argues 25% is fine, the cap kicks the request to APPROVAL not AUTO.
+7. **Snapshots are skipped on total-failure runs.** If every enabled platform errored, we don't write a snapshot, because a corrupt baseline poisons the next run's diff. Run exits with code 7 so the cron operator notices.
+8. **Audit log key is `run_id` set in env, not generated per call.** The entrypoint stamps `ADLOOPS_RUN_ID` in `os.environ` so every guardrail decision in that run logs the same id. Lets us reconstruct an entire run from `.audit.jsonl`.
+9. **Fail-loud, not fail-quiet, when brand.json is broken.** Loader raises `BrandConfigError`; entrypoint catches and routes to Telegram before exiting nonzero. Operator sees the message in the same place as a normal report.
+10. **Cross-reference thresholds are tuned to the kLOsk/adloop defaults.** Consent gap flagged at ≥30% (EU traffic floor with normal GDPR consent rejection), attribution gap at ≥25% (Ads vs GA4 conversion deltas above this usually mean a real wiring issue, not noise), real-CPA drift at ≥25%. Defined as module constants in `telegram_report.py` so they're easy to tune from data.
 
 ### Test coverage
 
@@ -49,8 +56,9 @@ guardrails, Syncthing-backed brand directory).
 |--------|-------|-------|
 | `guardrails.py` | 17 | Every rule + the audit log. Includes the divide-by-zero edge case (0 → positive = "infinite %" → APPROVAL). |
 | `brand_loader.py` | 9 | Valid load, missing file, invalid JSON, empty personas, missing company.name, bad pct, missing platform keys, scaffold creation, scaffold idempotency. |
-| `audit.py` | 8 | Deltas with/without prior, top movers, snapshot write/read, latest-archive selection, recommendations, fetch-all platform skipping, missing-creds path. |
-| `telegram_report.py` | 11 | Header rendering, disabled/error platform lines, top movers section, recommendations, no-actions message, chunk splitting (intact + oversized), env-var validation, dry-run preview, max-message cap. |
+| `audit.py` | 13 | Deltas with/without prior, top movers, snapshot write/read, latest-archive selection, recommendations, fetch-all platform skipping, missing-creds path, plus GA4 enrichment (join, missing creds, zero matches, API error, skip-when-google-disabled). |
+| `mcp_clients.py` | 13 | `CampaignPerf` cross-reference properties (consent gap, attribution gap, real CPA — all edge cases) + `GoogleAnalyticsClient` env validation (raw/prefixed property id, missing creds, OAuth fallback). |
+| `telegram_report.py` | 17 | Header rendering, disabled/error platform lines, top movers section, recommendations, no-actions message, chunk splitting (intact + oversized), env-var validation, dry-run preview, max-message cap, plus the Tracking & consent section (consent gap flagged, attribution gap flagged, CPA drift flagged, omitted when below threshold, GA4 skip reason surfaced, Meta/LinkedIn campaigns ignored). |
 | `run.py` | 7 | Scaffold mode, brand-missing → exit 2, empty personas → exit 2, no platforms enabled → exit 3, happy dry-run → exit 0, audit crash → exit 4, all-platforms-failed → exit 7. |
 
 The mock surface is intentionally narrow: `audit.run_audit` and `telegram_report.send_messages` are monkeypatched in entrypoint tests; everything else is real code. We do *not* mock the API clients — those are exercised by the smoke test only (manual, with real creds).
@@ -72,6 +80,7 @@ ADLOOPS_BRAND_DIR=/tmp/adloops-final TELEGRAM_BOT_TOKEN=fake \
 
 What was *not* smoke-tested (no creds available):
 - Live Google Ads `searchStream` query — only the SDK call shape was verified.
+- Live GA4 `runReport` against `sessionGoogleAdsCampaignId` — only the request shape and response parsing are verified by unit tests with stubbed responses.
 - Live Meta Marketing Graph paged read — `_fetch_paged` is exercised in unit tests at the structural level only.
 - Live LinkedIn `adAnalytics` query — same.
 - Real Telegram send — the formatter and chunking are tested; the HTTP path (`urlopen` to api.telegram.org) is not.
@@ -88,7 +97,7 @@ These are the explicit gaps for Phase 1 acceptance. The cron operator should run
 ### Submodule pins — full SHAs
 
 ```
-skill/mcp-servers/google-ads     c3c8067e2e862255884a641b4816669291258375  (tag: v0.7.0)
+skill/mcp-servers/adloop         c3c8067e2e862255884a641b4816669291258375  (tag: v0.7.0)
 skill/mcp-servers/linkedin-ads   05a27618628408af263ac56a1ca62a8aef404718  (no tag)
 ```
 
@@ -97,14 +106,16 @@ skill/mcp-servers/linkedin-ads   05a27618628408af263ac56a1ca62a8aef404718  (no t
 ```
 .
 ├── README.md
+├── RESUME.md
 ├── development.md          ← this file
+├── install.sh              ← first-run bootstrap (uv install + submodule build + venv)
 ├── requirements.txt
 ├── setup.md
 ├── skill/
 │   ├── SKILL.md
 │   ├── mcp-servers/
-│   │   ├── google-ads/      [submodule]
-│   │   └── linkedin-ads/    [submodule]
+│   │   ├── adloop/          [submodule — Google Ads + GA4 MCP, kLOsk/adloop @ v0.7.0]
+│   │   └── linkedin-ads/    [submodule — danielpopamd/linkedin-ads-mcp @ 05a2761]
 │   ├── references/
 │   │   ├── brand.example.json
 │   │   └── brand.schema.json
@@ -123,6 +134,7 @@ skill/mcp-servers/linkedin-ads   05a27618628408af263ac56a1ca62a8aef404718  (no t
     ├── test_audit.py
     ├── test_brand_loader.py
     ├── test_guardrails.py
+    ├── test_mcp_clients.py
     ├── test_run_entrypoint.py
     └── test_telegram_report.py
 ```

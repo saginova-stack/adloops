@@ -8,9 +8,10 @@ Spec format per run:
 1. Header — date, run #, platforms reached
 2. Headline metrics — spend / impressions / clicks / conversions / CPA / ROAS, deltas
 3. Top movers — 3 best, 3 worst with concrete numbers
-4. Actions taken — every auto-mutation with $ impact (P1: empty)
-5. Pending approvals — anything blocked by guardrails (P1: empty)
-6. Recommendations — 3-5 things suggested but not auto-executed
+4. Tracking & consent — consent gap / attribution gap flags from GA4 cross-reference (Google Ads only)
+5. Actions taken — every auto-mutation with $ impact (P1: empty)
+6. Pending approvals — anything blocked by guardrails (P1: empty)
+7. Recommendations — 3-5 things suggested but not auto-executed
 
 Cap at ~3000 chars/message and split if needed.
 """
@@ -86,6 +87,53 @@ def _truncate(s: str, n: int) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
+# Thresholds for surfacing cross-reference flags. Tuned to match the kLOsk
+# adloop tool defaults: consent gaps above ~30% are typically GDPR-driven
+# (normal EU traffic floor), attribution gaps above 25% usually mean either
+# a broken conversion event or a long attribution window.
+CONSENT_GAP_FLAG_PCT = 30.0
+ATTRIBUTION_GAP_FLAG_PCT = 25.0
+REAL_CPA_DRIFT_FLAG_PCT = 25.0
+
+
+def _tracking_flags(r: AuditReport) -> list[str]:
+    """Return one human-readable line per Google Ads campaign that crossed
+    a cross-reference threshold worth surfacing in the report.
+    """
+    flags: list[str] = []
+    for pr in r.platforms:
+        if pr.platform != "google" or not pr.fetched:
+            continue
+        for c in pr.campaigns:
+            name = _truncate(c.campaign_name, 40)
+            gap = c.consent_gap_pct
+            if gap is not None and gap >= CONSENT_GAP_FLAG_PCT:
+                flags.append(
+                    f"  ⚠ {name}: {gap:.0f}% consent gap "
+                    f"({c.clicks} Ads clicks → {c.ga4_sessions} GA4 sessions). "
+                    f"Likely GDPR consent rejection or broken tracking."
+                )
+            attr = c.attribution_gap_pct
+            if attr is not None and attr >= ATTRIBUTION_GAP_FLAG_PCT:
+                flags.append(
+                    f"  ⚠ {name}: {attr:.0f}% attribution gap "
+                    f"(Ads: {c.conversions:.0f} conv vs GA4: {c.ga4_conversions:.0f} conv). "
+                    f"Check attribution window and conversion event wiring."
+                )
+            real = c.real_cpa
+            reported = c.cpa
+            if (
+                real is not None and reported is not None and reported > 0
+                and abs(real - reported) / reported * 100 >= REAL_CPA_DRIFT_FLAG_PCT
+            ):
+                direction = "higher" if real > reported else "lower"
+                flags.append(
+                    f"  ⚠ {name}: real CPA {_fmt_money(real)} vs reported {_fmt_money(reported)} "
+                    f"({direction} via GA4). Investigate conversion events."
+                )
+    return flags
+
+
 def render_report(r: AuditReport) -> list[str]:
     """Build the message body, possibly split into chunks ≤ MAX_MSG chars."""
     reached = [pr.platform for pr in r.platforms if pr.fetched]
@@ -111,7 +159,17 @@ def render_report(r: AuditReport) -> list[str]:
             movers_lines.extend(_delta_line(d) for d in r.top_movers_worst)
         sections.append("\n".join(movers_lines))
 
-    # 4) Actions taken
+    # 4) Tracking & consent (GA4 cross-reference)
+    google_pr = next((pr for pr in r.platforms if pr.platform == "google"), None)
+    flags = _tracking_flags(r)
+    if flags:
+        lines = ["Tracking & consent:"] + flags
+        sections.append("\n".join(lines))
+    elif google_pr and google_pr.fetched and google_pr.ga4_status and google_pr.ga4_status != "ok":
+        # Surface why we couldn't compute cross-reference — operator visibility.
+        sections.append(f"Tracking & consent: GA4 enrichment {google_pr.ga4_status}")
+
+    # 5) Actions taken
     if r.actions_taken:
         lines = ["Actions taken:"]
         for a in r.actions_taken:
@@ -123,7 +181,7 @@ def render_report(r: AuditReport) -> list[str]:
     else:
         sections.append("Actions taken: none (read-only run)")
 
-    # 5) Pending approvals
+    # 6) Pending approvals
     if r.pending_approvals:
         lines = ["Pending approvals:"]
         for a in r.pending_approvals:
@@ -133,7 +191,7 @@ def render_report(r: AuditReport) -> list[str]:
             )
         sections.append("\n".join(lines))
 
-    # 6) Recommendations
+    # 7) Recommendations
     if r.recommendations:
         lines = ["Recommendations:"] + [f"  • {rec}" for rec in r.recommendations]
         sections.append("\n".join(lines))

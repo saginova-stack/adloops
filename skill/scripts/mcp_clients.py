@@ -1,12 +1,19 @@
 """Thin Python adapters that talk to each ad-platform MCP / API.
 
-Phase 1 contract (read-only): every adapter exposes one method,
-`fetch_perf_7d() -> list[CampaignPerf]`, returning a normalized shape
-across platforms. Mutation methods will be added in Phase 2 and routed
-through scripts/guardrails.py.
+Phase 1 contract (read-only): each platform adapter exposes
+`fetch_perf_7d() -> list[CampaignPerf]`, returning a normalized shape.
+Mutation methods will be added in Phase 2 and routed through
+scripts/guardrails.py.
+
+A separate `GoogleAnalyticsClient` pulls paid-Google-traffic metrics from
+GA4 so the audit can compute the cross-reference signals (consent gap,
+attribution gap, real CPA) for each Google Ads campaign. This mirrors the
+cross-reference value the vendored kLOsk/adloop MCP exposes as first-class
+tools — we compute it ourselves in Phase 1 to keep the cron path
+deterministic (no subprocess, no stdio).
 
 Why hand-rolled clients instead of MCP-over-stdio for read calls?
-The MCP servers are designed for an LLM client (fastmcp/Node MCP). For a
+The MCP servers are designed for an LLM client (fastmcp / Node MCP). For a
 headless cron run we don't need an LLM in the loop to pull a single
 report — direct API access is simpler and deterministic. The MCP servers
 will still be the canonical client for *interactive* OC sessions and for
@@ -14,8 +21,11 @@ mutations in Phase 2 (where the preview/confirm pattern of the kLOsk
 adloop server matches our guardrail flow exactly).
 
 Auth env (Phase 1):
-- Google: GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID,
+- Google Ads: GOOGLE_ADS_DEVELOPER_TOKEN, GOOGLE_ADS_CLIENT_ID,
   GOOGLE_ADS_CLIENT_SECRET, GOOGLE_ADS_REFRESH_TOKEN, GOOGLE_ADS_LOGIN_CUSTOMER_ID
+- GA4 (optional, enriches Google Ads rows): GA4_PROPERTY_ID and either
+  GOOGLE_APPLICATION_CREDENTIALS (service-account JSON, preferred for cron)
+  or the Google Ads OAuth refresh token (fallback — same OAuth scope set).
 - Meta: META_ACCESS_TOKEN, META_AD_ACCOUNT_ID (e.g. "act_1234567890")
 - LinkedIn: LINKEDIN_ACCESS_TOKEN, LINKEDIN_AD_ACCOUNT_URN
 """
@@ -46,6 +56,13 @@ class CampaignPerf:
     revenue: float | None           # 7-day sum, if available
     extra: dict[str, Any] = field(default_factory=dict)
 
+    # GA4 cross-reference fields. Populated for Google Ads campaigns when GA4
+    # credentials are configured and the campaign id matches a GA4 row. None
+    # everywhere else (other platforms, missing creds, or unmatched campaign).
+    ga4_sessions: int | None = None
+    ga4_conversions: float | None = None
+    ga4_revenue: float | None = None
+
     @property
     def cpa(self) -> float | None:
         return self.spend / self.conversions if self.conversions else None
@@ -58,8 +75,52 @@ class CampaignPerf:
     def ctr(self) -> float | None:
         return self.clicks / self.impressions if self.impressions else None
 
+    @property
+    def consent_gap_pct(self) -> float | None:
+        """Share of Ads-reported clicks that GA4 did not record as sessions.
+
+        Large positive values typically indicate GDPR consent rejection or
+        broken pixel/gtag tracking. Returns 0 when GA4 reports more sessions
+        than Ads reports clicks (the join key isn't 1:1 across vendors).
+        None when GA4 isn't enriched or clicks=0.
+        """
+        if self.ga4_sessions is None or self.clicks == 0:
+            return None
+        gap = self.clicks - self.ga4_sessions
+        if gap <= 0:
+            return 0.0
+        return (gap / self.clicks) * 100.0
+
+    @property
+    def attribution_gap_pct(self) -> float | None:
+        """Absolute percent difference between Ads-reported conversions
+        and GA4-recorded conversions. None if GA4 isn't enriched or
+        Ads-reported conversions is 0.
+        """
+        if self.ga4_conversions is None or self.conversions == 0:
+            return None
+        return (abs(self.conversions - self.ga4_conversions) / self.conversions) * 100.0
+
+    @property
+    def real_cpa(self) -> float | None:
+        """CPA against GA4-recorded conversions, not Ads-reported.
+
+        None when GA4 conversions are absent or zero.
+        """
+        if self.ga4_conversions is None or self.ga4_conversions <= 0:
+            return None
+        return self.spend / self.ga4_conversions
+
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+@dataclass
+class GA4Metrics:
+    sessions: int
+    engaged_sessions: int
+    conversions: float
+    revenue: float
 
 
 class MissingCredentialsError(RuntimeError):
@@ -159,6 +220,87 @@ class GoogleAdsClient:
                 conversions=round(c["conversions"], 2),
                 revenue=round(c["revenue"], 2) if c["revenue"] else None,
             ))
+        return out
+
+
+# ---------------- Google Analytics 4 (enrichment for Google Ads) ----------
+
+class GoogleAnalyticsClient:
+    """Reads GA4 metrics for paid Google traffic and returns them keyed by
+    Google Ads campaign id.
+
+    The audit pipeline joins these onto the Google Ads `CampaignPerf` rows
+    so the report can flag GDPR consent gaps and attribution discrepancies.
+    The `google-analytics-data` SDK is imported lazily so the rest of the
+    skill (and the test suite) can import this module without the SDK.
+
+    Auth: the SDK reads `GOOGLE_APPLICATION_CREDENTIALS` (service-account
+    JSON path) on its own — preferred for cron. If absent it falls back to
+    Google Application Default Credentials, which on a headless server
+    means the user OAuth flow needs to have been completed first (via
+    `uv run adloop init` in the vendored MCP).
+    """
+
+    REQUIRED_ENV = ("GA4_PROPERTY_ID",)
+
+    def __init__(self):
+        missing = [k for k in self.REQUIRED_ENV if not os.environ.get(k)]
+        if missing:
+            raise MissingCredentialsError(f"GA4: missing env {missing}")
+        if not (
+            os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+            or os.environ.get("GOOGLE_ADS_REFRESH_TOKEN")
+        ):
+            raise MissingCredentialsError(
+                "GA4: set GOOGLE_APPLICATION_CREDENTIALS to a service-account JSON path "
+                "(preferred for cron), or run `uv run adloop init` so ADC credentials "
+                "are on disk."
+            )
+        # GA4 property id may be raw ("123456789") or in the full
+        # "properties/123456789" form — accept both.
+        pid = os.environ["GA4_PROPERTY_ID"]
+        self.property_id = pid.split("/")[-1]
+
+    def fetch_paid_google_metrics_7d(self) -> dict[str, GA4Metrics]:
+        """Return {google_ads_campaign_id: GA4Metrics} for the last 7 days.
+
+        Rows where `sessionGoogleAdsCampaignId` is empty or "(not set)" are
+        organic / non-Google-paid traffic and are excluded.
+        """
+        from google.analytics.data_v1beta import BetaAnalyticsDataClient  # type: ignore
+        from google.analytics.data_v1beta.types import (  # type: ignore
+            DateRange,
+            Dimension,
+            Metric,
+            RunReportRequest,
+        )
+
+        client = BetaAnalyticsDataClient()
+        start, end = _last_7_days()
+        req = RunReportRequest(
+            property=f"properties/{self.property_id}",
+            date_ranges=[DateRange(start_date=start, end_date=end)],
+            dimensions=[Dimension(name="sessionGoogleAdsCampaignId")],
+            metrics=[
+                Metric(name="sessions"),
+                Metric(name="engagedSessions"),
+                Metric(name="conversions"),
+                Metric(name="totalRevenue"),
+            ],
+            limit=10000,
+        )
+        response = client.run_report(req)
+        out: dict[str, GA4Metrics] = {}
+        for row in response.rows:
+            cid = row.dimension_values[0].value
+            if not cid or cid == "(not set)":
+                continue
+            out[cid] = GA4Metrics(
+                sessions=int(row.metric_values[0].value or 0),
+                engaged_sessions=int(row.metric_values[1].value or 0),
+                conversions=float(row.metric_values[2].value or 0),
+                revenue=float(row.metric_values[3].value or 0),
+            )
         return out
 
 

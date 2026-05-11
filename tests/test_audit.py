@@ -163,3 +163,115 @@ def test_fetch_all_records_missing_creds(monkeypatch):
         assert r.enabled is True
         assert r.fetched is False
         assert "missing env" in (r.error or "")
+
+
+# ---------- GA4 enrichment ----------
+
+class _FakeGA4:
+    """Stand-in for GoogleAnalyticsClient — returns a fixed metric map."""
+
+    def __init__(self, by_campaign_id: dict):
+        self._data = by_campaign_id
+
+    def fetch_paid_google_metrics_7d(self):
+        return self._data
+
+
+def _setup_google_with_campaigns(monkeypatch, campaigns):
+    """Stub GoogleAdsClient + Meta/LinkedIn to skip; return enabled set."""
+    from scripts.mcp_clients import MissingCredentialsError
+
+    class FakeGoogle:
+        def fetch_perf_7d(self):
+            return campaigns
+
+    def raise_missing():
+        raise MissingCredentialsError("disabled for test")
+
+    monkeypatch.setattr(audit_mod, "GoogleAdsClient", FakeGoogle)
+    monkeypatch.setattr(audit_mod, "MetaAdsClient", raise_missing)
+    monkeypatch.setattr(audit_mod, "LinkedInAdsClient", raise_missing)
+
+
+def test_enrich_google_with_ga4_joins_on_campaign_id(monkeypatch):
+    from scripts.mcp_clients import GA4Metrics
+
+    _setup_google_with_campaigns(monkeypatch, [
+        cp(campaign_id="111", clicks=200, conversions=10.0),
+        cp(campaign_id="222", clicks=150, conversions=5.0),
+    ])
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: _FakeGA4({
+        "111": GA4Metrics(sessions=130, engaged_sessions=80, conversions=14.0, revenue=420.0),
+        # "222" intentionally absent — confirms only matched rows get enriched.
+    }))
+
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status == "ok"
+    by_id = {c.campaign_id: c for c in g.campaigns}
+    assert by_id["111"].ga4_sessions == 130
+    assert by_id["111"].ga4_conversions == 14.0
+    assert by_id["222"].ga4_sessions is None  # unmatched stays unenriched
+
+
+def test_enrich_google_with_ga4_skipped_on_missing_creds(monkeypatch):
+    from scripts.mcp_clients import MissingCredentialsError
+
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+
+    def raise_missing():
+        raise MissingCredentialsError("GA4: missing env ['GA4_PROPERTY_ID']")
+
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", raise_missing)
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status is not None and g.ga4_status.startswith("skipped:")
+    assert "GA4_PROPERTY_ID" in g.ga4_status
+    assert g.campaigns[0].ga4_sessions is None
+
+
+def test_enrich_google_with_ga4_skipped_on_zero_matches(monkeypatch):
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: _FakeGA4({}))
+
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status is not None and "no GA4 rows matched" in g.ga4_status
+
+
+def test_enrich_google_with_ga4_handles_api_error(monkeypatch):
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+
+    class BoomClient:
+        def fetch_paid_google_metrics_7d(self):
+            raise RuntimeError("GA4 API 403: PERMISSION_DENIED")
+
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: BoomClient())
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status is not None and "PERMISSION_DENIED" in g.ga4_status
+    # Google Ads row itself is still considered fetched — enrichment is optional.
+    assert g.fetched is True
+
+
+def test_enrich_skipped_when_google_disabled(monkeypatch):
+    from scripts.mcp_clients import MissingCredentialsError
+
+    def raise_missing():
+        raise MissingCredentialsError("disabled")
+
+    monkeypatch.setattr(audit_mod, "GoogleAdsClient", raise_missing)
+    monkeypatch.setattr(audit_mod, "MetaAdsClient", raise_missing)
+    monkeypatch.setattr(audit_mod, "LinkedInAdsClient", raise_missing)
+
+    ga4_called = {"flag": False}
+
+    def ga4_factory():
+        ga4_called["flag"] = True
+        return _FakeGA4({})
+
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", ga4_factory)
+    audit_mod.fetch_all({"google", "meta", "linkedin"})
+    # GA4 enrichment must short-circuit when Google didn't fetch — no point
+    # paying for an extra API call we can't apply.
+    assert ga4_called["flag"] is False

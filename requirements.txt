@@ -5,6 +5,10 @@
 # Google Ads SDK (matches kLOsk/adloop @ v0.7.0 pinned version range).
 google-ads>=29.0.0
 
+# GA4 Data API — used for the cross-reference signals (consent gap,
+# attribution discrepancy, real CPA). Matches kLOsk/adloop's pinned version.
+google-analytics-data>=0.20.0
+
 # Test deps.
 pytest>=8.0
 jsonschema>=4.0

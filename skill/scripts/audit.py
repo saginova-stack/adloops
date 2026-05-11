@@ -15,6 +15,7 @@ from . import paths
 from .mcp_clients import (
     CampaignPerf,
     GoogleAdsClient,
+    GoogleAnalyticsClient,
     LinkedInAdsClient,
     MetaAdsClient,
     MissingCredentialsError,
@@ -28,6 +29,10 @@ class PlatformResult:
     fetched: bool
     error: str | None
     campaigns: list[CampaignPerf] = field(default_factory=list)
+    # GA4 cross-reference enrichment is best-effort: when it fails (missing
+    # creds, GA4 disabled on the account, API hiccup) we keep the Google Ads
+    # numbers but surface the reason here so the report can flag it.
+    ga4_status: str | None = None  # "ok" | "disabled" | "skipped: <reason>"
 
     def totals(self) -> dict[str, float]:
         spend = sum(c.spend for c in self.campaigns)
@@ -102,7 +107,47 @@ def fetch_all(enabled_platforms: set[str]) -> list[PlatformResult]:
             results.append(PlatformResult(plat, enabled=True, fetched=True, error=None, campaigns=campaigns))
         except Exception as e:  # noqa: BLE001 — top-level audit is best-effort per platform
             results.append(PlatformResult(plat, enabled=True, fetched=False, error=f"{type(e).__name__}: {e}"))
+    enrich_google_with_ga4(results)
     return results
+
+
+def enrich_google_with_ga4(results: list[PlatformResult]) -> None:
+    """Join GA4 paid-Google metrics onto each fetched Google Ads campaign.
+
+    Best-effort: missing creds or API errors leave the Google rows
+    un-enriched but populate `ga4_status` on the Google `PlatformResult`
+    so the report can surface why the cross-reference signals aren't
+    available.
+    """
+    google = next((r for r in results if r.platform == "google" and r.fetched), None)
+    if not google:
+        return
+    try:
+        ga4 = GoogleAnalyticsClient()
+    except MissingCredentialsError as e:
+        google.ga4_status = f"skipped: {e}"
+        return
+    try:
+        ga4_data = ga4.fetch_paid_google_metrics_7d()
+    except Exception as e:  # noqa: BLE001 — enrichment is best-effort
+        google.ga4_status = f"skipped: {type(e).__name__}: {e}"
+        return
+    matched = 0
+    for c in google.campaigns:
+        m = ga4_data.get(c.campaign_id)
+        if not m:
+            continue
+        c.ga4_sessions = m.sessions
+        c.ga4_conversions = round(m.conversions, 2)
+        c.ga4_revenue = round(m.revenue, 2) if m.revenue else None
+        matched += 1
+    if matched == 0 and google.campaigns:
+        google.ga4_status = (
+            "skipped: no GA4 rows matched any Google Ads campaign id — "
+            "check that the GA4 property has Google Ads linked"
+        )
+    else:
+        google.ga4_status = "ok"
 
 
 def latest_archive(archive_dir: Path | None = None) -> dict[str, Any] | None:
@@ -133,6 +178,7 @@ def write_snapshot(report: AuditReport, archive_dir: Path | None = None) -> Path
                 "enabled": pr.enabled,
                 "fetched": pr.fetched,
                 "error": pr.error,
+                "ga4_status": pr.ga4_status,
                 "totals": pr.totals(),
                 "campaigns": [c.to_dict() for c in pr.campaigns],
             }

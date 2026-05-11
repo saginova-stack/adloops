@@ -147,3 +147,70 @@ def test_render_chunks_under_telegram_max():
     )
     chunks = render_report(r)
     assert all(len(c) <= MAX_MSG for c in chunks)
+
+
+# ---------- Tracking & consent section ----------
+
+def test_tracking_section_flags_consent_gap():
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_name="EU brand", clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" in out
+    assert "EU brand" in out
+    assert "50% consent gap" in out
+
+
+def test_tracking_section_flags_attribution_gap():
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_name="Search US", clicks=200, ga4_sessions=190, conversions=10.0, ga4_conversions=14.0),
+    ])
+    pr.ga4_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" in out
+    assert "attribution gap" in out
+    assert "Search US" in out
+
+
+def test_tracking_section_flags_cpa_drift():
+    # Reported CPA: 200/4 = 50; real CPA via GA4: 200/8 = 25 → 50% lower.
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_name="Brand", spend=200.0, clicks=190, ga4_sessions=190, conversions=4.0, ga4_conversions=8.0),
+    ])
+    pr.ga4_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "real CPA" in out
+
+
+def test_tracking_section_omitted_when_within_thresholds():
+    pr = PlatformResult("google", True, True, None, [
+        cp(clicks=200, ga4_sessions=190, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" not in out
+
+
+def test_tracking_section_shows_ga4_skip_reason():
+    pr = PlatformResult("google", True, True, None, [cp()])
+    pr.ga4_status = "skipped: GA4: missing env ['GA4_PROPERTY_ID']"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent: GA4 enrichment skipped" in out
+    assert "GA4_PROPERTY_ID" in out
+
+
+def test_tracking_section_only_flags_google_campaigns():
+    # Meta campaign with the same "consent gap" shape — should be ignored
+    # because Meta doesn't have a GA4 cross-reference.
+    meta_pr = PlatformResult("meta", True, True, None, [
+        cp(platform="meta", campaign_name="meta-camp", clicks=200, ga4_sessions=100),
+    ])
+    r = make_report(platforms=[meta_pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" not in out
