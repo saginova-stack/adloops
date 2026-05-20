@@ -2,7 +2,7 @@
 
 Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
 
-> Phase 1 (read-only audit + GA4 cross-reference) and Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations) shipped. LinkedIn mutations (Phase 3) blocked on Marketing Developer Platform approval.
+> Phase 1 (read-only audit + GA4 cross-reference), Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations), and Phase 3 (LinkedIn mutation executor) shipped. LinkedIn mutations still need Marketing Developer Platform approval before they can run against live accounts — the code is in place and tested against MCP mocks.
 
 ## Layout
 
@@ -20,6 +20,7 @@ adloops/
 │   │   ├── mcp_runner.py        ← synchronous MCP stdio JSON-RPC client
 │   │   ├── executors/
 │   │   │   ├── google.py        ← adloop MCP preview/confirm
+│   │   │   ├── linkedin.py      ← linkedin-ads MCP update_campaign
 │   │   │   └── meta.py          ← Marketing Graph API direct
 │   │   ├── recommender.py       ← OpenRouter → Anthropic → rule-based chain
 │   │   └── telegram_report.py
@@ -29,7 +30,7 @@ adloops/
 │   └── mcp-servers/             ← vendored submodules
 │       ├── adloop/              → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
 │       └── linkedin-ads/        → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                       ← 148 tests covering every module
+├── tests/                       ← 158 tests covering every module
 ├── install.sh                   ← one-shot first-run install (uv + submodule build + venv)
 ├── setup.md                     ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt
@@ -59,5 +60,5 @@ See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.
 
 1. **Phase 1** — read-only audit + GA4 cross-reference + Telegram report. ✅ shipped.
 2. **Phase 2** — guardrailed Google + Meta mutations, LLM-driven recommendations, `--approve` mode. ✅ shipped.
-3. **Phase 3** — LinkedIn mutations. ⏳ blocked on Marketing Developer Platform approval (1–5 day SLA from LinkedIn).
+3. **Phase 3** — LinkedIn mutations. ✅ executor shipped (tested against MCP mocks); live calls require Marketing Developer Platform approval on the LinkedIn app (1–5 day SLA from LinkedIn) plus a one-time `node dist/auth-cli.js` to seed the token store.
 4. **Phase 4** — creative generation. Out of scope for this repo.

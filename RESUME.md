@@ -3,10 +3,10 @@
 Read this first when picking the project back up. It captures the exact state
 of the repo, what's blocking forward progress, and the concrete next actions.
 
-## State as of 2026-05-11
+## State as of 2026-05-20
 
-- **Phase 1 + Phase 2 complete and committed.** LinkedIn mutations (Phase 3) blocked on Marketing Developer Platform approval.
-- **148 tests passing.**
+- **Phases 1, 2, and 3 (LinkedIn executor) code-complete.** Phase 3 is tested against MCP mocks; going live still needs LinkedIn Marketing Developer Platform approval on the app plus a one-time `node dist/auth-cli.js` to seed the token store.
+- **158 tests passing.**
 - **Skill installed live** at `~/.openclaw/workspace/skills/adloops` (symlink → `~/adloops/skill/`).
 - **No remote configured.** `git remote -v` shows nothing — push when you decide where this lives (likely a private GitHub repo since `brand.json` will reference real ICP details).
 
@@ -37,7 +37,7 @@ Per-audit-run mutation pipeline:
 3. **Dispatch**:
    - Google → `pause_entity` / `update_campaign` → `confirm_and_apply` via the kLOsk/adloop MCP over stdio
    - Meta → direct Marketing Graph API (`ads_management` scope required)
-   - LinkedIn → raises "Phase 3 — blocked on MDP approval"
+   - LinkedIn → `update_campaign` via the vendored linkedin-ads MCP over stdio (requires MDP approval + `node dist/auth-cli.js` at runtime; mocked in tests)
 4. **Recommendations**: `recommender.recommendations(report, brand)` returns LLM-driven advice if `OPENROUTER_API_KEY` or `ANTHROPIC_API_KEY` is set, else falls back to the rule-based section.
 
 Every AUTO/APPROVAL/REJECTED decision writes one JSONL line to `.audit.jsonl`. The `--approve` CLI mode reads those rows and replays a single APPROVAL after re-running `check_mutation` against current brand config.
@@ -51,17 +51,18 @@ CLI flags:
 ## What I can do right now without anything else from Michiel
 
 - Read tests, refactor, clean up.
-- Add Phase 3 LinkedIn executor against mocks (real wiring needs MDP approval).
 - Tune the mutation thresholds in `mutations.py` (currently constants — make them brand-config?).
 - Add landing-page level cross-reference (paid traffic + zero conversions per page) — would mean a second GA4 query joining `pagePath × sessionGoogleAdsCampaignId`.
 - Wire metric persistence so week-over-week consent-gap and attribution-gap trends are reported.
+- Batch LinkedIn `AUTO` mutations on one MCP session in `run.py` (currently per-call spawn, mirroring the Google batching pattern would save ~1s × N spawns when there are multiple LinkedIn AUTOs).
 
 ## What Michiel needs to provide before Phase 2 is operationally green
 
 Cumulative list — mirror of `setup.md` §7:
 
 - [ ] **Run `./install.sh`** at the repo root — installs uv, syncs the adloop MCP, builds the LinkedIn MCP, creates the skill's `.venv`. Idempotent.
-- [ ] LinkedIn Marketing Developer Platform application submitted (1–5 day approval — **start this first**, it's the long pole for Phase 3)
+- [ ] LinkedIn Marketing Developer Platform application submitted on the LinkedIn app (1–5 day approval — **start this first** so the Phase 3 executor can run against live accounts)
+- [ ] LinkedIn OAuth seeded once via `cd skill/mcp-servers/linkedin-ads && node dist/auth-cli.js`
 - [ ] Google Ads developer token applied for
 - [ ] Combined OAuth wizard run: `cd skill/mcp-servers/adloop && uv run adloop init`
 - [ ] GA4 service-account JSON created and `GOOGLE_APPLICATION_CREDENTIALS` env set
@@ -94,7 +95,7 @@ After every run in the first month, read `~/Syncthing/adloops-brand/campaigns/.a
 
 ```bash
 cd /home/ubuntu/adloops
-.venv/bin/pytest tests/ -q          # confirm 148 pass
+.venv/bin/pytest tests/ -q          # confirm 158 pass
 git log --oneline -10               # confirm latest commit is HEAD
 ls /home/ubuntu/.openclaw/workspace/skills/adloops/SKILL.md   # confirm symlink intact
 ls skill/mcp-servers/adloop/pyproject.toml                    # confirm submodule present
@@ -103,25 +104,41 @@ ls skill/mcp-servers/linkedin-ads/package.json                # confirm submodul
 
 If any of those fail, see "Recovery" below.
 
-## Phase 3 plan (LinkedIn mutations — blocked)
+## Phase 3 (LinkedIn mutations — code shipped, awaiting auth)
 
-Trigger when LinkedIn MDP approval lands. Concretely:
+What's in place:
 
-1. Add `skill/scripts/executors/linkedin.py` that spawns the vendored
-   `danielpopamd/linkedin-ads-mcp` via `mcp_runner` (same pattern as the
-   Google executor — Node command instead of uv). Tool surface from the
-   MCP: `pause_campaign`, `enable_campaign`, `update_campaign_budget`,
-   etc. Map our `Mutation` shape onto the LinkedIn-MCP tool args.
-2. Update `executors/__init__.py:dispatch` to route LinkedIn through it
-   instead of raising the "Phase 3" error.
-3. Verify the proposer doesn't need changes — the rules are
-   platform-agnostic (they read `CampaignPerf.platform`).
-4. Add `tests/test_executors_linkedin.py` mirroring the Google tests.
-5. Update `setup.md` to remove the Phase 3 disclaimer.
+- `skill/scripts/executors/linkedin.py` — spawns the vendored
+  `danielpopamd/linkedin-ads-mcp` via `mcp_runner` (Node command) and
+  maps `Mutation.kind` onto a single MCP tool call: `update_campaign`
+  with `status=PAUSED`/`ACTIVE` for pause/enable, or
+  `dailyBudgetAmount` for budget_change.
+- `executors/__init__.py:dispatch` routes `linkedin` through the new
+  executor (the "Phase 3 blocked" error is gone).
+- `tests/test_executors.py` has 10 LinkedIn-specific cases mirroring
+  the Google/Meta patterns: URN→numeric-id stripping, currency
+  passthrough, dry-run shape, missing env, unsupported kind, inactive
+  session.
 
-The MCP itself is already installed by `install.sh` and `node dist/auth-cli.js` documented in `setup.md` §3.
+What still needs to happen before live:
 
-Most of the work is auth (the LinkedIn MCP has a 3-legged OAuth flow that needs an explicit one-time `node dist/auth-cli.js` run) and mapping our `Mutation.kind` values to LinkedIn's API.
+1. **MDP approval** on the LinkedIn app at
+   https://www.linkedin.com/developers/apps (1–5 business days).
+2. **One-time OAuth seed**: `cd skill/mcp-servers/linkedin-ads && node dist/auth-cli.js`.
+   This writes a token to the MCP's on-disk store; the executor
+   doesn't manage tokens itself.
+3. Export `LINKEDIN_AD_ACCOUNT_URN`
+   (e.g. `urn:li:sponsoredAccount:1234567890`) — the executor strips
+   the trailing numeric segment to get the MCP's `accountId`.
+4. (Optional) Set `currency` in proposer/mutation payloads if the
+   account is non-USD — the LinkedIn MCP defaults `dailyBudgetCurrency`
+   to USD when omitted.
+
+Known follow-up: `run.py` currently dispatches Meta and LinkedIn AUTOs
+per-call (spawn-per-mutation). For LinkedIn that's a Node MCP spawn per
+mutation. If real-world runs produce multiple LinkedIn AUTOs, mirror
+the Google batching path (`_dispatch_google_batch`) — `LinkedInExecutor`
+is already a context manager so the call-site change is small.
 
 ## Recovery
 

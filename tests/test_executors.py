@@ -8,10 +8,13 @@ from scripts.executors import (
     UnsupportedPlatformError,
     dispatch,
     google,
+    linkedin,
     meta,
 )
 from scripts.executors.google import ExecutorError as GoogleExecutorError
 from scripts.executors.google import GoogleExecutor
+from scripts.executors.linkedin import ExecutorError as LinkedInExecutorError
+from scripts.executors.linkedin import LinkedInExecutor
 from scripts.executors.meta import ExecutorError as MetaExecutorError
 from scripts.guardrails import Mutation
 
@@ -195,6 +198,176 @@ def test_meta_unsupported_kind_raises(monkeypatch):
         meta.dispatch(m, dry_run=False)
 
 
+# ---- LinkedIn executor --------------------------------------------------
+
+def _li_env(monkeypatch):
+    monkeypatch.setenv("LINKEDIN_AD_ACCOUNT_URN", "urn:li:sponsoredAccount:5550001")
+
+
+def test_linkedin_pause_calls_update_campaign_with_status_paused(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({
+        "update_campaign": {"success": True, "campaignId": "12345"},
+    })
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:12345",
+        campaign_name="Brand",
+        kind="pause",
+        before={"status": "ACTIVE"}, after={"status": "PAUSED"},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        result = ex.dispatch(m, dry_run=False)
+    assert result == {"success": True, "campaignId": "12345"}
+    assert sess.calls == [(
+        "update_campaign",
+        {"accountId": "5550001", "campaignId": "12345", "status": "PAUSED"},
+    )]
+
+
+def test_linkedin_enable_uses_status_active(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({"update_campaign": {"success": True}})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:42",
+        campaign_name="x",
+        kind="enable",
+        before={"status": "PAUSED"}, after={"status": "ACTIVE"},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        ex.dispatch(m, dry_run=False)
+    assert sess.calls[0][1]["status"] == "ACTIVE"
+
+
+def test_linkedin_budget_change_passes_daily_budget_amount_as_string(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({"update_campaign": {"success": True}})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:42",
+        campaign_name="x",
+        kind="budget_change",
+        before={"daily_budget": 100.0}, after={"daily_budget": 80.5},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        ex.dispatch(m, dry_run=False)
+    args = sess.calls[0][1]
+    assert args == {
+        "accountId": "5550001",
+        "campaignId": "42",
+        "dailyBudgetAmount": "80.50",
+    }
+
+
+def test_linkedin_budget_change_honors_explicit_currency(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({"update_campaign": {"success": True}})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:42",
+        campaign_name="x",
+        kind="budget_change",
+        before={"daily_budget": 100.0},
+        after={"daily_budget": 80.0, "currency": "EUR"},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        ex.dispatch(m, dry_run=False)
+    assert sess.calls[0][1]["dailyBudgetCurrency"] == "EUR"
+
+
+def test_linkedin_budget_change_rejects_non_positive(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:42",
+        campaign_name="x",
+        kind="budget_change",
+        before={"daily_budget": 100.0}, after={"daily_budget": 0.0},
+    )
+    with LinkedInExecutor(session=sess) as ex, pytest.raises(LinkedInExecutorError, match="non-positive"):
+        ex.dispatch(m, dry_run=False)
+    assert sess.calls == []
+
+
+def test_linkedin_dry_run_does_not_call_tool(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({})  # any call would raise — proves we didn't call
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:42",
+        campaign_name="x",
+        kind="pause",
+        before={"status": "ACTIVE"}, after={"status": "PAUSED"},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        result = ex.dispatch(m, dry_run=True)
+    assert sess.calls == []
+    assert result["dry_run"] is True
+    assert result["tool"] == "update_campaign"
+    assert result["arguments"]["status"] == "PAUSED"
+    # raw URN preserved in the audit shape so logs match the audit's campaign_id
+    assert result["campaign_id"] == "urn:li:sponsoredAdCampaign:42"
+
+
+def test_linkedin_unsupported_kind_raises(monkeypatch):
+    _li_env(monkeypatch)
+    sess = FakeSession({})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:1",
+        campaign_name="x",
+        kind="something_weird",
+    )
+    with LinkedInExecutor(session=sess) as ex, pytest.raises(LinkedInExecutorError, match="Unsupported"):
+        ex.dispatch(m, dry_run=False)
+
+
+def test_linkedin_missing_account_urn_raises(monkeypatch):
+    monkeypatch.delenv("LINKEDIN_AD_ACCOUNT_URN", raising=False)
+    sess = FakeSession({})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:1",
+        campaign_name="x",
+        kind="pause",
+        before={"status": "ACTIVE"}, after={"status": "PAUSED"},
+    )
+    with LinkedInExecutor(session=sess) as ex, pytest.raises(LinkedInExecutorError, match="LINKEDIN_AD_ACCOUNT_URN"):
+        ex.dispatch(m, dry_run=False)
+
+
+def test_linkedin_dispatch_requires_active_session():
+    ex = LinkedInExecutor()
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:1",
+        campaign_name="x",
+        kind="pause",
+    )
+    with pytest.raises(LinkedInExecutorError, match="not active"):
+        ex.dispatch(m)
+
+
+def test_linkedin_strips_urn_to_numeric_id(monkeypatch):
+    """Audit stores campaign_id as the URN; MCP expects the numeric tail.
+
+    Guard against drift: if either side changes encoding, this catches it."""
+    _li_env(monkeypatch)
+    sess = FakeSession({"update_campaign": {"success": True}})
+    m = Mutation(
+        platform="linkedin",
+        campaign_id="urn:li:sponsoredAdCampaign:9876543210",
+        campaign_name="x",
+        kind="pause",
+        before={"status": "ACTIVE"}, after={"status": "PAUSED"},
+    )
+    with LinkedInExecutor(session=sess) as ex:
+        ex.dispatch(m, dry_run=False)
+    assert sess.calls[0][1]["campaignId"] == "9876543210"
+
+
 # ---- top-level dispatcher ----------------------------------------------
 
 def test_dispatch_routes_to_google(monkeypatch):
@@ -213,10 +386,12 @@ def test_dispatch_routes_to_meta(monkeypatch):
     assert called["m"][1] is False
 
 
-def test_dispatch_rejects_linkedin():
+def test_dispatch_routes_to_linkedin(monkeypatch):
+    called = {}
+    monkeypatch.setattr(linkedin, "dispatch", lambda m, *, dry_run: called.setdefault("l", (m, dry_run)) or {"ok": True})
     m = Mutation(platform="linkedin", campaign_id="x", campaign_name="x", kind="pause")
-    with pytest.raises(UnsupportedPlatformError, match="Phase 3"):
-        dispatch(m)
+    dispatch(m, dry_run=True)
+    assert called["l"][1] is True
 
 
 def test_dispatch_rejects_unknown_platform():

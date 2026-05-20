@@ -153,7 +153,7 @@ Skill symlinked: `/home/ubuntu/.openclaw/workspace/skills/adloops -> /home/ubunt
 - *(latest)* — LLM recommender chain (`scripts/recommender.py`) + docs
 
 **Date:** 2026-05-11.
-**Test status:** 148 passing.
+**Test status:** 158 passing.
 
 ### What ships
 
@@ -206,16 +206,56 @@ Not smoke-tested (no creds):
 
 ---
 
-## Phase 3 — LinkedIn mutations (blocked)
+## Phase 3 — LinkedIn mutations (executor shipped, live calls pending auth)
 
 ---
 
-Mirror of the Meta executor in `scripts/executors/linkedin.py`. The
-vendored MCP (`danielpopamd/linkedin-ads-mcp`) is already installed by
-`install.sh` and the `executors.dispatch` router already raises a clear
-"Phase 3 — blocked on MDP approval" error for LinkedIn — flipping that
-to a real executor is a single file change plus tests once the LinkedIn
-Marketing Developer Platform approval lands (1–5 day SLA).
+What landed:
+
+- `scripts/executors/linkedin.py` — a `LinkedInExecutor` context manager
+  that spawns the vendored `danielpopamd/linkedin-ads-mcp` (Node, stdio)
+  via `mcp_runner`. Unlike Google's adloop MCP, the LinkedIn MCP has no
+  preview/confirm two-step — pause/enable/budget_change all flow through
+  the single `update_campaign` tool with a partial-update payload.
+  Semantically closer to Meta; transport-wise closer to Google.
+- `scripts/executors/__init__.py:dispatch` routes `linkedin` to the new
+  executor (the "Phase 3 — blocked on MDP approval" error is removed).
+- `tests/test_executors.py` covers pause/enable/budget shape, URN →
+  numeric ID stripping, explicit-currency passthrough, dry-run shape
+  (no MCP call), missing `LINKEDIN_AD_ACCOUNT_URN`, unsupported kind,
+  and inactive-session guard — same coverage envelope as Google/Meta.
+
+Phase 3 design decisions:
+
+1. **One context-manager executor with module-level `dispatch()` for
+   one-offs.** Mirrors Google's structure so when batching becomes
+   worth wiring into `run.py` it's a call-site change, not an executor
+   rewrite. `executors.dispatch()` from `run.py`'s `_dispatch_one()`
+   spawn-tears-down per mutation today — fine for the common case,
+   noted in `RESUME.md` as a follow-up.
+2. **All three kinds → `update_campaign`.** The MCP's tool surface
+   covers pause/enable/budget via different fields on one call. Splitting
+   into pseudo-tools would have meant matching against e.g.
+   `pause_campaign` which the MCP doesn't expose. Mapping is in
+   `_to_tool_args` so future kinds (audience, schedule) layer on
+   without restructuring.
+3. **URN ↔ numeric ID stripping happens in the executor**, not in the
+   audit. The audit keeps the URN (it's the natural key on the LinkedIn
+   API) so reports, snapshots, and `.audit.jsonl` stay consistent across
+   read/write paths. The executor strips on the way out.
+4. **Currency defaults to the MCP's USD default, with explicit
+   `mutation.after['currency']` passthrough.** The audit doesn't capture
+   currency today; rather than block on lifting that into the data
+   model, the executor honors an opt-in field and otherwise lets the
+   MCP default. Non-USD accounts surface as an API error from LinkedIn
+   if there's a currency mismatch — preferred over silent miscoercion.
+5. **Tokens are the MCP's problem.** The executor doesn't manage
+   OAuth — the LinkedIn MCP refreshes via its on-disk token store using
+   `LINKEDIN_CLIENT_ID`/`LINKEDIN_CLIENT_SECRET` from inherited env.
+   This keeps the executor stateless and matches how Google's executor
+   delegates to adloop.
+
+Live-calls prerequisites are documented in `setup.md` §3.4 and `RESUME.md`.
 
 ---
 

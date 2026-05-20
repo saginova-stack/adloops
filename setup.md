@@ -20,10 +20,13 @@ Meta Ads, and LinkedIn Ads, posted to Telegram via the OpenClaw bot.
   nowhere else. Capped at 10 mutations per run. LLM-driven recommendations
   (OpenRouter Nemotron → Anthropic Haiku → rule-based fallback) replace
   the rule-based recommendations when a key is present.
-- **Phase 3 (LinkedIn mutations)**: pending LinkedIn Marketing Developer
-  Platform approval. The vendored `linkedin-ads-mcp` is installed but the
-  executor path isn't wired (`executors.dispatch` raises an explicit
-  "Phase 3 — blocked on MDP approval" error for LinkedIn mutations).
+- **Phase 3 (LinkedIn mutations)**: executor code is in place and tested
+  against MCP mocks. To go live against real accounts you still need
+  (a) LinkedIn Marketing Developer Platform approval on the LinkedIn app
+  and (b) a one-time `node dist/auth-cli.js` run inside
+  `skill/mcp-servers/linkedin-ads` to seed the MCP's token store.
+  Without those, calls will fail with a LinkedIn auth error from the
+  MCP — same as if the OAuth wasn't done.
 
 ## 1. First-run install
 
