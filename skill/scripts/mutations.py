@@ -8,22 +8,30 @@ the AUTO ones to the platform executors.
 
 Phase 2 starter rules:
 
-1. **Pause zombies** — pause any campaign that spent ≥ `PAUSE_ZOMBIE_MIN_SPEND`
-   over the 7d window with zero conversions. (Pause is always AUTO via the
-   guardrails, so these execute immediately.)
+1. **Pause zombies** — pause any campaign that spent at least
+   `brand.thresholds.pause_zombie_min_spend` over the 7d window with zero
+   conversions. (Pause is always AUTO via the guardrails, so these
+   execute immediately.)
 
-2. **Decrease on CPA spike** — if a campaign's CPA grew ≥ `DECREASE_CPA_SPIKE_PCT`
-   week-over-week, propose a budget decrease at the brand's `±N%` cap.
+2. **Decrease on CPA spike** — if a campaign's CPA grew at least
+   `brand.thresholds.decrease_cpa_spike_pct` week-over-week, propose a
+   budget decrease at the brand's `±N%` cap.
 
-3. **Increase on CPA drop** — if a campaign's CPA dropped ≥ `INCREASE_CPA_DROP_PCT`
+3. **Increase on CPA drop** — if a campaign's CPA dropped at least
+   `brand.thresholds.increase_cpa_drop_pct` (a non-positive percent)
    AND conversions rose week-over-week, propose a budget increase at the
-   cap. The cross-platform ceiling rule in `guardrails.py` will reject any
-   increase that breaches `neverIncreaseBudgetAbove`.
+   cap. The cross-platform ceiling rule in `guardrails.py` will reject
+   any increase that breaches `neverIncreaseBudgetAbove`.
 
-Caps: the proposer never emits more than `MAX_PROPOSALS_PER_RUN` mutations
-to keep runaway changes physically impossible. Pause proposals are prioritized
-over budget changes (kill the zombie before scaling neighbours), and a single
+Caps: the proposer never emits more than
+`brand.thresholds.max_proposals_per_run` mutations to keep runaway
+changes physically impossible. Pause proposals are prioritized over
+budget changes (kill the zombie before scaling neighbours), and a single
 campaign never gets more than one proposal per run.
+
+Thresholds are configured per-brand via `guardrails.proposer` in
+brand.json; the `DEFAULT_*` constants below remain importable as the
+historical/example values.
 """
 
 from __future__ import annotations
@@ -32,28 +40,25 @@ from dataclasses import dataclass
 from typing import Iterable
 
 from .audit import AuditReport, CampaignDelta, PlatformResult
-from .brand_loader import Brand
+from .brand_loader import (
+    Brand,
+    DEFAULT_DECREASE_CPA_SPIKE_PCT,
+    DEFAULT_INCREASE_CPA_DROP_PCT,
+    DEFAULT_MAX_PROPOSALS_PER_RUN,
+    DEFAULT_PAUSE_ZOMBIE_MIN_SPEND,
+    ProposerThresholds,
+)
 from .guardrails import Mutation
 from .mcp_clients import CampaignPerf
 
 
-# ---- thresholds (tunable from data once Phase 2 has been running) ----------
-
-# Pause any campaign spending at least this much over the 7-day window with
-# zero conversions. Tuned to avoid pausing tiny test campaigns; bump if it's
-# too aggressive in practice.
-PAUSE_ZOMBIE_MIN_SPEND = 50.0
-
-# Week-over-week CPA growth that triggers a budget *decrease* proposal.
-DECREASE_CPA_SPIKE_PCT = 50.0
-
-# Week-over-week CPA drop (negative number) that, combined with positive
-# conversion delta, triggers a budget *increase* proposal.
-INCREASE_CPA_DROP_PCT = -25.0
-
-# Hard cap on proposals emitted per run. Even with ten zombie campaigns we'd
-# rather make ten conservative tweaks across two weeks than ten today.
-MAX_PROPOSALS_PER_RUN = 10
+# Re-exports for callers that previously imported these directly. Live
+# tuning happens via brand.json; these are the defaults used when the
+# `guardrails.proposer` block is absent.
+PAUSE_ZOMBIE_MIN_SPEND = DEFAULT_PAUSE_ZOMBIE_MIN_SPEND
+DECREASE_CPA_SPIKE_PCT = DEFAULT_DECREASE_CPA_SPIKE_PCT
+INCREASE_CPA_DROP_PCT = DEFAULT_INCREASE_CPA_DROP_PCT
+MAX_PROPOSALS_PER_RUN = DEFAULT_MAX_PROPOSALS_PER_RUN
 
 
 # ---- propose ---------------------------------------------------------------
@@ -65,6 +70,7 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
     for both a pause and a budget change, pause wins (more conservative).
     """
     cap_pct = brand.max_daily_budget_change_pct
+    th = brand.thresholds
     seen: set[tuple[str, str]] = set()
     out: list[Mutation] = []
 
@@ -79,13 +85,13 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
         _propose_decrease_on_cpa_spike,
         _propose_increase_on_cpa_drop,
     ):
-        for m in proposer(report, perf_index, delta_index, cap_pct):
+        for m in proposer(report, perf_index, delta_index, cap_pct, th):
             key = (m.platform, m.campaign_id)
             if key in seen:
                 continue
             seen.add(key)
             out.append(m)
-            if len(out) >= MAX_PROPOSALS_PER_RUN:
+            if len(out) >= th.max_proposals_per_run:
                 return out
     return out
 
@@ -97,6 +103,7 @@ def _propose_pause_zombies(
     perf: dict[tuple[str, str], CampaignPerf],
     deltas: dict[tuple[str, str], CampaignDelta],
     cap_pct: float,
+    th: ProposerThresholds,
 ) -> Iterable[Mutation]:
     for pr in report.platforms:
         if not pr.fetched:
@@ -104,7 +111,7 @@ def _propose_pause_zombies(
         for c in pr.campaigns:
             if c.status != "ENABLED":
                 continue
-            if c.spend < PAUSE_ZOMBIE_MIN_SPEND:
+            if c.spend < th.pause_zombie_min_spend:
                 continue
             if c.conversions > 0:
                 continue
@@ -127,12 +134,13 @@ def _propose_decrease_on_cpa_spike(
     perf: dict[tuple[str, str], CampaignPerf],
     deltas: dict[tuple[str, str], CampaignDelta],
     cap_pct: float,
+    th: ProposerThresholds,
 ) -> Iterable[Mutation]:
     for d in report.deltas:
         if d.cpa_prev is None or d.cpa_now is None or d.cpa_prev <= 0:
             continue
         growth_pct = ((d.cpa_now - d.cpa_prev) / d.cpa_prev) * 100.0
-        if growth_pct < DECREASE_CPA_SPIKE_PCT:
+        if growth_pct < th.decrease_cpa_spike_pct:
             continue
         c = perf.get((d.platform, d.campaign_id))
         if not c or c.daily_budget is None or c.daily_budget <= 0:
@@ -158,6 +166,7 @@ def _propose_increase_on_cpa_drop(
     perf: dict[tuple[str, str], CampaignPerf],
     deltas: dict[tuple[str, str], CampaignDelta],
     cap_pct: float,
+    th: ProposerThresholds,
 ) -> Iterable[Mutation]:
     for d in report.deltas:
         if (
@@ -166,7 +175,7 @@ def _propose_increase_on_cpa_drop(
         ):
             continue
         drop_pct = ((d.cpa_now - d.cpa_prev) / d.cpa_prev) * 100.0
-        if drop_pct > INCREASE_CPA_DROP_PCT:
+        if drop_pct > th.increase_cpa_drop_pct:
             continue
         if d.conversions_now <= d.conversions_prev:
             continue

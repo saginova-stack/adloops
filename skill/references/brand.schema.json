@@ -65,6 +65,33 @@
             "meta": { "type": "boolean" },
             "linkedin": { "type": "boolean" }
           }
+        },
+        "proposer": {
+          "description": "Per-brand tuning for the mutation proposer. Every field is optional; missing fields fall back to the proposer defaults (50, 50, -25, 10).",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "pauseZombieMinSpend": {
+              "description": "Pause any campaign that spent at least this much over the 7-day window with zero conversions.",
+              "type": "number",
+              "minimum": 0
+            },
+            "decreaseCpaSpikePct": {
+              "description": "Week-over-week CPA growth (percent) that triggers a budget-decrease proposal at the brand's maxDailyBudgetChangePct cap.",
+              "type": "number",
+              "minimum": 0
+            },
+            "increaseCpaDropPct": {
+              "description": "Week-over-week CPA drop (a non-positive percent, e.g. -25) that triggers a budget-increase proposal when conversions also rose.",
+              "type": "number",
+              "maximum": 0
+            },
+            "maxProposalsPerRun": {
+              "description": "Hard cap on proposals emitted per run. Pauses are prioritised; once the cap is hit no further proposals are evaluated.",
+              "type": "integer",
+              "minimum": 1
+            }
+          }
         }
       }
     }

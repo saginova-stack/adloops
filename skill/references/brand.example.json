@@ -37,6 +37,12 @@
       "google": true,
       "meta": true,
       "linkedin": true
+    },
+    "proposer": {
+      "pauseZombieMinSpend": 50,
+      "decreaseCpaSpikePct": 50,
+      "increaseCpaDropPct": -25,
+      "maxProposalsPerRun": 10
     }
   }
 }

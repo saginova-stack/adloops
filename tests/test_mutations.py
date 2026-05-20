@@ -57,7 +57,9 @@ def make_report(*, campaigns, deltas=None):
     )
 
 
-def brand_with(pct=20.0, ceiling=None, requires_approval=False):
+def brand_with(pct=20.0, ceiling=None, requires_approval=False, proposer=None):
+    """proposer=None means no proposer block — the loader applies its
+    defaults. Pass a dict to override one or more thresholds."""
     raw = {
         "company": {"name": "Test Co"},
         "icp": {"personas": [{"name": "x", "role": "y", "painPoints": ["z"]}]},
@@ -70,6 +72,8 @@ def brand_with(pct=20.0, ceiling=None, requires_approval=False):
             "neverIncreaseBudgetAbove": ceiling,
         },
     }
+    if proposer is not None:
+        raw["guardrails"]["proposer"] = proposer
     return Brand(raw=raw)
 
 
@@ -210,6 +214,71 @@ def test_skips_platforms_that_did_not_fetch():
     r = make_report(campaigns=[cp(spend=200.0, conversions=0)])
     r.platforms[0].fetched = False  # simulate fetch failure
     ms = propose(r, brand_with())
+    assert ms == []
+
+
+# ---- brand-configured thresholds ------------------------------------------
+
+def test_zombie_threshold_overridden_from_brand_config():
+    """A more cautious brand wants $200 spend before pausing; $80 zombies
+    that used to fire under the default $50 floor should now stay alive."""
+    r = make_report(campaigns=[
+        cp(campaign_id="SMALL_ZOMBIE", spend=80.0, conversions=0),
+        cp(campaign_id="BIG_ZOMBIE", spend=300.0, conversions=0),
+    ])
+    ms = propose(r, brand_with(proposer={"pauseZombieMinSpend": 200}))
+    assert len(ms) == 1
+    assert ms[0].campaign_id == "BIG_ZOMBIE"
+
+
+def test_cpa_spike_threshold_overridden_from_brand_config():
+    """A jumpy account wants the budget cut to fire at 30% CPA growth, not
+    the default 50%. Without the override the rule wouldn't trip."""
+    r = make_report(
+        campaigns=[cp(campaign_id="X", daily_budget=100.0)],
+        deltas=[cd(campaign_id="X", cpa_now=130.0, cpa_prev=100.0, conversions_now=2.0, conversions_prev=2.0)],
+    )
+    # Default behaviour: nothing fires.
+    assert propose(r, brand_with()) == []
+    # With a 30% trigger, the same delta now produces a budget cut.
+    ms = propose(r, brand_with(proposer={"decreaseCpaSpikePct": 30}))
+    assert len(ms) == 1
+    assert ms[0].kind == "budget_change"
+    assert ms[0].after == {"daily_budget": 80.0}  # still capped at 20%
+
+
+def test_cpa_drop_threshold_overridden_from_brand_config():
+    """Pickier brand wants the scale-up to require a 40% drop, not 25%.
+    A 30% drop that used to scale should now stay flat."""
+    r = make_report(
+        campaigns=[cp(campaign_id="W", daily_budget=100.0, conversions=8.0)],
+        deltas=[cd(campaign_id="W", cpa_now=70.0, cpa_prev=100.0, conversions_now=8.0, conversions_prev=4.0)],
+    )
+    # 30% drop fires under default -25 trigger.
+    assert len(propose(r, brand_with())) == 1
+    # Same delta no longer fires when the operator demands -40.
+    assert propose(r, brand_with(proposer={"increaseCpaDropPct": -40})) == []
+
+
+def test_max_proposals_per_run_overridden_from_brand_config():
+    """A conservative brand wants at most 3 changes per run regardless of
+    how many zombies showed up. Cap respected without touching code."""
+    campaigns = [cp(campaign_id=f"Z{i}", spend=200.0, conversions=0) for i in range(8)]
+    r = make_report(campaigns=campaigns)
+    ms = propose(r, brand_with(proposer={"maxProposalsPerRun": 3}))
+    assert len(ms) == 3
+
+
+def test_partial_proposer_block_uses_defaults_for_unset_fields():
+    """Operators should be able to override one threshold without listing
+    the other three. The loader merges per-field, not all-or-nothing."""
+    # Override only the pause threshold; the CPA-spike default (50%) still
+    # applies — so a 30% spike does NOT fire.
+    r = make_report(
+        campaigns=[cp(campaign_id="X", daily_budget=100.0)],
+        deltas=[cd(campaign_id="X", cpa_now=130.0, cpa_prev=100.0)],
+    )
+    ms = propose(r, brand_with(proposer={"pauseZombieMinSpend": 1000}))
     assert ms == []
 
 

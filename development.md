@@ -153,7 +153,7 @@ Skill symlinked: `/home/ubuntu/.openclaw/workspace/skills/adloops -> /home/ubunt
 - *(latest)* — LLM recommender chain (`scripts/recommender.py`) + docs
 
 **Date:** 2026-05-11.
-**Test status:** 167 passing.
+**Test status:** 178 passing.
 
 ### What ships
 

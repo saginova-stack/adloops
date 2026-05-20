@@ -30,7 +30,7 @@ adloops/
 │   └── mcp-servers/             ← vendored submodules
 │       ├── adloop/              → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
 │       └── linkedin-ads/        → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                       ← 167 tests covering every module
+├── tests/                       ← 178 tests covering every module
 ├── install.sh                   ← one-shot first-run install (uv + submodule build + venv)
 ├── setup.md                     ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt

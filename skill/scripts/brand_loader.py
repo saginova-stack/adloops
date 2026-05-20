@@ -20,6 +20,28 @@ class BrandConfigError(Exception):
     """Raised when brand.json is missing, malformed, or under-specified."""
 
 
+# Defaults match the original module-constant values from mutations.py.
+# Operators can override any subset of these via `guardrails.proposer`
+# in brand.json; missing fields fall through to these.
+DEFAULT_PAUSE_ZOMBIE_MIN_SPEND = 50.0
+DEFAULT_DECREASE_CPA_SPIKE_PCT = 50.0
+DEFAULT_INCREASE_CPA_DROP_PCT = -25.0
+DEFAULT_MAX_PROPOSALS_PER_RUN = 10
+
+
+@dataclass(frozen=True)
+class ProposerThresholds:
+    """Per-brand tuning knobs for the mutation proposer.
+
+    Defaults are the original module constants — a brand.json with no
+    `guardrails.proposer` block gets exactly the previous behaviour.
+    """
+    pause_zombie_min_spend: float = DEFAULT_PAUSE_ZOMBIE_MIN_SPEND
+    decrease_cpa_spike_pct: float = DEFAULT_DECREASE_CPA_SPIKE_PCT
+    increase_cpa_drop_pct: float = DEFAULT_INCREASE_CPA_DROP_PCT
+    max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
+
+
 @dataclass(frozen=True)
 class Brand:
     raw: dict[str, Any]
@@ -49,6 +71,24 @@ class Brand:
     def enabled_platforms(self) -> set[str]:
         p = self.raw["guardrails"]["platforms"]
         return {k for k, v in p.items() if v}
+
+    @property
+    def thresholds(self) -> ProposerThresholds:
+        p = self.raw["guardrails"].get("proposer") or {}
+        return ProposerThresholds(
+            pause_zombie_min_spend=float(
+                p.get("pauseZombieMinSpend", DEFAULT_PAUSE_ZOMBIE_MIN_SPEND)
+            ),
+            decrease_cpa_spike_pct=float(
+                p.get("decreaseCpaSpikePct", DEFAULT_DECREASE_CPA_SPIKE_PCT)
+            ),
+            increase_cpa_drop_pct=float(
+                p.get("increaseCpaDropPct", DEFAULT_INCREASE_CPA_DROP_PCT)
+            ),
+            max_proposals_per_run=int(
+                p.get("maxProposalsPerRun", DEFAULT_MAX_PROPOSALS_PER_RUN)
+            ),
+        )
 
 
 REQUIRED_TOP_LEVEL = ("company", "icp", "valueProps", "brandVoice", "guardrails")
@@ -117,6 +157,37 @@ def _validate(raw: Any) -> None:
         raise BrandConfigError(
             "brand.json: guardrails.platforms must include google, meta, linkedin booleans"
         )
+
+    prop = g.get("proposer")
+    if prop is not None:
+        if not isinstance(prop, dict):
+            raise BrandConfigError("brand.json: guardrails.proposer must be an object")
+        if "pauseZombieMinSpend" in prop:
+            v = prop["pauseZombieMinSpend"]
+            if not isinstance(v, (int, float)) or v < 0:
+                raise BrandConfigError(
+                    "brand.json: guardrails.proposer.pauseZombieMinSpend must be a non-negative number"
+                )
+        if "decreaseCpaSpikePct" in prop:
+            v = prop["decreaseCpaSpikePct"]
+            if not isinstance(v, (int, float)) or v < 0:
+                raise BrandConfigError(
+                    "brand.json: guardrails.proposer.decreaseCpaSpikePct must be a non-negative number "
+                    "(percent CPA growth that triggers a budget cut)"
+                )
+        if "increaseCpaDropPct" in prop:
+            v = prop["increaseCpaDropPct"]
+            if not isinstance(v, (int, float)) or v > 0:
+                raise BrandConfigError(
+                    "brand.json: guardrails.proposer.increaseCpaDropPct must be a non-positive number "
+                    "(e.g. -25 for a 25% CPA drop)"
+                )
+        if "maxProposalsPerRun" in prop:
+            v = prop["maxProposalsPerRun"]
+            if not isinstance(v, int) or v < 1:
+                raise BrandConfigError(
+                    "brand.json: guardrails.proposer.maxProposalsPerRun must be a positive integer"
+                )
 
 
 def load_or_raise(brand_json: Path | None = None) -> Brand:
