@@ -33,6 +33,11 @@ class PlatformResult:
     # creds, GA4 disabled on the account, API hiccup) we keep the Google Ads
     # numbers but surface the reason here so the report can flag it.
     ga4_status: str | None = None  # "ok" | "disabled" | "skipped: <reason>"
+    # Landing-page secondary GA4 query is independent: the primary
+    # campaign-level enrichment can succeed while this one errors. Kept on
+    # its own field so a working ga4_status isn't masked by a flaky landing
+    # query.
+    ga4_landing_status: str | None = None
 
     def totals(self) -> dict[str, float]:
         spend = sum(c.spend for c in self.campaigns)
@@ -108,6 +113,7 @@ def fetch_all(enabled_platforms: set[str]) -> list[PlatformResult]:
         except Exception as e:  # noqa: BLE001 — top-level audit is best-effort per platform
             results.append(PlatformResult(plat, enabled=True, fetched=False, error=f"{type(e).__name__}: {e}"))
     enrich_google_with_ga4(results)
+    enrich_google_with_landing_pages(results)
     return results
 
 
@@ -150,6 +156,37 @@ def enrich_google_with_ga4(results: list[PlatformResult]) -> None:
         google.ga4_status = "ok"
 
 
+def enrich_google_with_landing_pages(results: list[PlatformResult]) -> None:
+    """Attach per-landing-page GA4 metrics to each Google Ads campaign.
+
+    Depends on enrich_google_with_ga4 having succeeded: if the primary
+    enrichment is anything other than "ok" we skip silently with a status
+    that points at the same root cause — there's no signal worth pulling
+    if we couldn't even resolve the campaign-level join.
+    """
+    google = next((r for r in results if r.platform == "google" and r.fetched), None)
+    if not google:
+        return
+    if google.ga4_status != "ok":
+        google.ga4_landing_status = "skipped: primary GA4 enrichment not ok"
+        return
+    try:
+        ga4 = GoogleAnalyticsClient()
+    except MissingCredentialsError as e:
+        google.ga4_landing_status = f"skipped: {e}"
+        return
+    try:
+        by_campaign = ga4.fetch_paid_landing_pages_7d()
+    except Exception as e:  # noqa: BLE001 — secondary query is best-effort
+        google.ga4_landing_status = f"skipped: {type(e).__name__}: {e}"
+        return
+    for c in google.campaigns:
+        rows = by_campaign.get(c.campaign_id)
+        if rows:
+            c.ga4_landing_pages = rows
+    google.ga4_landing_status = "ok"
+
+
 def latest_archive(archive_dir: Path | None = None) -> dict[str, Any] | None:
     d = archive_dir or paths.archive_dir()
     if not d.exists():
@@ -179,6 +216,7 @@ def write_snapshot(report: AuditReport, archive_dir: Path | None = None) -> Path
                 "fetched": pr.fetched,
                 "error": pr.error,
                 "ga4_status": pr.ga4_status,
+                "ga4_landing_status": pr.ga4_landing_status,
                 "totals": pr.totals(),
                 "campaigns": [c.to_dict() for c in pr.campaigns],
             }

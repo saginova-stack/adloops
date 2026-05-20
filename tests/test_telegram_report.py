@@ -216,6 +216,111 @@ def test_tracking_section_only_flags_google_campaigns():
     assert "Tracking & consent:" not in out
 
 
+# ---------- Landing-page flags (paid traffic, 0 conversions) ----------
+
+def _cp_with_landing(landing):
+    """CampaignPerf factory that bolts ga4_landing_pages on after construction.
+
+    GA4 numbers are deliberately balanced with the campaign-level numbers so
+    the existing consent/attribution/CPA flags don't fire — these tests are
+    specifically about the landing-page subsection, not the cross-reference
+    flags it lives next to."""
+    from scripts.mcp_clients import LandingPagePerf
+    c = cp(
+        campaign_name="Pricing search",
+        clicks=200, conversions=10.0, spend=100.0,
+        ga4_sessions=200, ga4_conversions=10.0,
+    )
+    c.ga4_landing_pages = [LandingPagePerf(**lp) for lp in landing]
+    return c
+
+
+def test_landing_flag_surfaces_paid_pages_with_zero_conversions():
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([
+            {"page_path": "/features", "sessions": 80, "conversions": 0.0},
+            {"page_path": "/pricing", "sessions": 120, "conversions": 12.0},  # converts — should NOT flag
+        ]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" in out
+    assert "Landing pages with paid traffic, 0 conversions:" in out
+    assert "/features" in out
+    assert "80 paid sessions" in out
+    # The converting page must not appear in the landing-flag list.
+    assert "/pricing" not in out
+
+
+def test_landing_flag_skips_pages_below_session_threshold():
+    """Low-traffic pages are noise — the threshold keeps the report tight."""
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([
+            {"page_path": "/quiet", "sessions": 5, "conversions": 0.0},
+            {"page_path": "/dead", "sessions": 19, "conversions": 0.0},  # just under threshold
+        ]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Landing pages with paid traffic" not in out
+
+
+def test_landing_flag_caps_to_top_n_by_sessions():
+    """When many pages qualify, the top-traffic ones win — anything
+    beyond the cap is dropped, not folded into a 'and N more' line."""
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([
+            {"page_path": f"/page-{i}", "sessions": 100 + i, "conversions": 0.0}
+            for i in range(10)
+        ]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    # Top by sessions desc: /page-9 (109) … /page-5 (105). The cap is 5.
+    assert "/page-9" in out
+    assert "/page-5" in out
+    assert "/page-4" not in out  # would be 6th, must be dropped
+
+
+def test_landing_flag_renders_alongside_consent_flag_in_one_section():
+    """The two kinds of cross-reference signal share the same section
+    so operators have one place to look — verify they don't split."""
+    from scripts.mcp_clients import LandingPagePerf
+
+    c = cp(campaign_name="EU brand", clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0)
+    c.ga4_landing_pages = [LandingPagePerf(page_path="/dead", sessions=60, conversions=0.0)]
+    pr = PlatformResult("google", True, True, None, [c])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr])
+    rendered = render_report(r)
+    # One Tracking & consent section, not two.
+    tracking_sections = [s for s in rendered if "Tracking & consent:" in s]
+    assert len(tracking_sections) == 1
+    section = tracking_sections[0]
+    assert "consent gap" in section
+    assert "/dead" in section
+
+
+def test_landing_flag_section_omitted_when_landing_pages_clean():
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([
+            {"page_path": "/converting", "sessions": 200, "conversions": 10.0},
+        ]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr])
+    out = "\n\n".join(render_report(r))
+    assert "Tracking & consent:" not in out
+
+
 # ---- Phase 2 action rendering ---------------------------------------------
 
 def _action_row(*, applied=False, dry_run=False, error=None, kind="pause",

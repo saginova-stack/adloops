@@ -147,28 +147,21 @@ Run from the OpenClaw server. Full step-by-step is in
 
 Pick any combination. Each is ~1 commit. Listed in recommended order:
 
-### 1. Landing-page cross-reference — recommended next
-
-Second GA4 query joining `pagePath × sessionGoogleAdsCampaignId` with
-sessions + conversions. Flags landing pages with paid traffic and zero
-conversions per campaign. New subsection under Tracking & consent in
-the Telegram report.
-
-### 2. Mutation thresholds → brand config
+### 1. Mutation thresholds → brand config — recommended next
 
 The proposer's `PAUSE_ZOMBIE_MIN_SPEND`, `DECREASE_CPA_SPIKE_PCT`,
 `INCREASE_CPA_DROP_PCT`, `MAX_PROPOSALS_PER_RUN` are currently module
 constants. Lift them into `brand.json` so tuning doesn't require code
 changes. JSON Schema + brand_loader + test updates.
 
-### 3. Week-over-week trend on cross-reference signals
+### 2. Week-over-week trend on cross-reference signals
 
 Today the report shows current-state consent gap (e.g. "41%"); comparing
 to last run gives "consent gap +8pp w/w" which is more actionable.
 Needs to read prior snapshot, compute delta on `ga4_sessions` /
 `consent_gap_pct`, surface in the report.
 
-### 4. Batch LinkedIn AUTOs on one MCP session
+### 3. Batch LinkedIn AUTOs on one MCP session
 
 `run.py` currently routes Meta and LinkedIn AUTOs through `_dispatch_one()`
 (spawn-per-call). Meta is HTTP so there's no spawn cost; LinkedIn is a
@@ -195,7 +188,7 @@ for 1 week → full mode.
 ## Where things live
 
 - **Code**: `/home/ubuntu/adloops/skill/scripts/`
-- **Tests**: `/home/ubuntu/adloops/tests/` (158 passing — `.venv/bin/pytest tests/ -q`)
+- **Tests**: `/home/ubuntu/adloops/tests/` (167 passing — `.venv/bin/pytest tests/ -q`)
 - **Vendored MCPs**: `/home/ubuntu/adloops/skill/mcp-servers/{adloop,linkedin-ads}/`
 - **Brand config (not yet present)**: `~/Syncthing/adloops-brand/brand.json`
 - **Audit log (not yet present)**: `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`

@@ -168,13 +168,23 @@ def test_fetch_all_records_missing_creds(monkeypatch):
 # ---------- GA4 enrichment ----------
 
 class _FakeGA4:
-    """Stand-in for GoogleAnalyticsClient — returns a fixed metric map."""
+    """Stand-in for GoogleAnalyticsClient — returns fixed metric maps.
 
-    def __init__(self, by_campaign_id: dict):
+    Supports both queries: the primary campaign-level rollup
+    (`fetch_paid_google_metrics_7d`) and the per-landing-page breakdown
+    (`fetch_paid_landing_pages_7d`). Defaults make landing-page lookups
+    return an empty dict so existing tests don't have to opt in.
+    """
+
+    def __init__(self, by_campaign_id: dict, landing_by_campaign: dict | None = None):
         self._data = by_campaign_id
+        self._landing = landing_by_campaign or {}
 
     def fetch_paid_google_metrics_7d(self):
         return self._data
+
+    def fetch_paid_landing_pages_7d(self):
+        return self._landing
 
 
 def _setup_google_with_campaigns(monkeypatch, campaigns):
@@ -275,3 +285,106 @@ def test_enrich_skipped_when_google_disabled(monkeypatch):
     # GA4 enrichment must short-circuit when Google didn't fetch — no point
     # paying for an extra API call we can't apply.
     assert ga4_called["flag"] is False
+
+
+# ---------- Landing-page secondary GA4 enrichment ----------
+
+def test_enrich_landing_pages_attaches_rows_to_matching_campaign(monkeypatch):
+    from scripts.mcp_clients import GA4Metrics, LandingPagePerf
+
+    _setup_google_with_campaigns(monkeypatch, [
+        cp(campaign_id="111", clicks=200, conversions=10.0),
+        cp(campaign_id="222", clicks=150, conversions=5.0),
+    ])
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: _FakeGA4(
+        by_campaign_id={
+            "111": GA4Metrics(sessions=130, engaged_sessions=80, conversions=14.0, revenue=420.0),
+            "222": GA4Metrics(sessions=120, engaged_sessions=70, conversions=5.0, revenue=180.0),
+        },
+        landing_by_campaign={
+            "111": [
+                LandingPagePerf(page_path="/pricing", sessions=80, conversions=10.0),
+                LandingPagePerf(page_path="/features", sessions=30, conversions=0.0),
+            ],
+            # "222" intentionally absent — confirms unmatched campaigns stay empty.
+        },
+    ))
+
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_landing_status == "ok"
+    by_id = {c.campaign_id: c for c in g.campaigns}
+    assert len(by_id["111"].ga4_landing_pages) == 2
+    paths = {lp.page_path for lp in by_id["111"].ga4_landing_pages}
+    assert paths == {"/pricing", "/features"}
+    assert by_id["222"].ga4_landing_pages == []
+
+
+def test_enrich_landing_pages_skipped_when_primary_ga4_failed(monkeypatch):
+    """The landing query depends on the campaign-level join making sense.
+
+    If the primary enrichment didn't produce 'ok', running the secondary
+    just burns API quota — short-circuit and surface why.
+    """
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: _FakeGA4({}))
+    # Empty primary -> "no GA4 rows matched", so secondary should skip.
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_landing_status is not None
+    assert "primary GA4 enrichment not ok" in g.ga4_landing_status
+
+
+def test_enrich_landing_pages_surfaces_api_error_without_masking_primary(monkeypatch):
+    """A flaky landing-page query must not nuke a working primary status.
+
+    Operator needs to see both: 'campaign-level joined fine' AND 'landing
+    breakdown failed for this reason'. Combining them on one field would
+    hide the partial win."""
+    from scripts.mcp_clients import GA4Metrics
+
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+
+    class FlakySecondary:
+        def fetch_paid_google_metrics_7d(self):
+            return {
+                "111": GA4Metrics(sessions=100, engaged_sessions=50, conversions=2.0, revenue=0.0),
+            }
+        def fetch_paid_landing_pages_7d(self):
+            raise RuntimeError("GA4 API 429: RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", lambda: FlakySecondary())
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status == "ok"  # primary still wins
+    assert g.ga4_landing_status is not None
+    assert "RESOURCE_EXHAUSTED" in g.ga4_landing_status
+
+
+def test_enrich_landing_pages_skipped_on_missing_creds(monkeypatch):
+    """When the secondary instantiation itself errors (creds rotated out
+    between primary and secondary, or something equally weird), surface
+    why on ga4_landing_status — don't crash the run."""
+    from scripts.mcp_clients import GA4Metrics, MissingCredentialsError
+
+    _setup_google_with_campaigns(monkeypatch, [cp(campaign_id="111")])
+
+    calls = {"n": 0}
+
+    class PrimaryThenMissing:
+        def __init__(self):
+            calls["n"] += 1
+            # First instantiation (primary) succeeds; second raises.
+            if calls["n"] >= 2:
+                raise MissingCredentialsError("GA4: credentials revoked")
+        def fetch_paid_google_metrics_7d(self):
+            return {
+                "111": GA4Metrics(sessions=100, engaged_sessions=50, conversions=2.0, revenue=0.0),
+            }
+
+    monkeypatch.setattr(audit_mod, "GoogleAnalyticsClient", PrimaryThenMissing)
+    results = audit_mod.fetch_all({"google"})
+    g = next(r for r in results if r.platform == "google")
+    assert g.ga4_status == "ok"
+    assert g.ga4_landing_status is not None
+    assert "credentials revoked" in g.ga4_landing_status

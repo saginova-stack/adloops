@@ -8,7 +8,7 @@ Spec format per run:
 1. Header — date, run #, platforms reached
 2. Headline metrics — spend / impressions / clicks / conversions / CPA / ROAS, deltas
 3. Top movers — 3 best, 3 worst with concrete numbers
-4. Tracking & consent — consent gap / attribution gap flags from GA4 cross-reference (Google Ads only)
+4. Tracking & consent — consent gap / attribution gap flags from GA4 cross-reference (Google Ads only), plus paid landing pages with 0 conversions
 5. Actions taken — every auto-mutation with $ impact (P1: empty)
 6. Pending approvals — anything blocked by guardrails (P1: empty)
 7. Recommendations — 3-5 things suggested but not auto-executed
@@ -131,6 +131,11 @@ def _action_detail(mut: dict) -> str:
 CONSENT_GAP_FLAG_PCT = 30.0
 ATTRIBUTION_GAP_FLAG_PCT = 25.0
 REAL_CPA_DRIFT_FLAG_PCT = 25.0
+# Landing-page flag: a paid landing page worth surfacing has enough paid
+# traffic to matter but recorded no GA4 conversions in the window. Capped
+# globally so a long-tail of low-volume pages can't crowd out the message.
+MIN_PAID_SESSIONS_FOR_LANDING_FLAG = 20
+MAX_LANDING_FLAGS = 5
 
 
 def _tracking_flags(r: AuditReport) -> list[str]:
@@ -171,6 +176,34 @@ def _tracking_flags(r: AuditReport) -> list[str]:
     return flags
 
 
+def _landing_page_flags(r: AuditReport) -> list[str]:
+    """One line per (campaign, landing page) pair with material paid
+    traffic and zero GA4 conversions. Top-N by sessions desc so the
+    message stays bounded when many pages qualify.
+    """
+    candidates: list[tuple[int, str]] = []  # (sessions, line)
+    for pr in r.platforms:
+        if pr.platform != "google" or not pr.fetched:
+            continue
+        for c in pr.campaigns:
+            if not c.ga4_landing_pages:
+                continue
+            name = _truncate(c.campaign_name, 40)
+            for lp in c.ga4_landing_pages:
+                if lp.sessions < MIN_PAID_SESSIONS_FOR_LANDING_FLAG:
+                    continue
+                if lp.conversions > 0:
+                    continue
+                page = _truncate(lp.page_path, 50)
+                line = (
+                    f"  ⚠ {name}: landing {page} — "
+                    f"{lp.sessions} paid sessions, 0 conversions."
+                )
+                candidates.append((lp.sessions, line))
+    candidates.sort(reverse=True)
+    return [line for _, line in candidates[:MAX_LANDING_FLAGS]]
+
+
 def render_report(r: AuditReport) -> list[str]:
     """Build the message body, possibly split into chunks ≤ MAX_MSG chars."""
     reached = [pr.platform for pr in r.platforms if pr.fetched]
@@ -199,8 +232,12 @@ def render_report(r: AuditReport) -> list[str]:
     # 4) Tracking & consent (GA4 cross-reference)
     google_pr = next((pr for pr in r.platforms if pr.platform == "google"), None)
     flags = _tracking_flags(r)
-    if flags:
+    landing_flags = _landing_page_flags(r)
+    if flags or landing_flags:
         lines = ["Tracking & consent:"] + flags
+        if landing_flags:
+            lines.append("  Landing pages with paid traffic, 0 conversions:")
+            lines.extend(landing_flags)
         sections.append("\n".join(lines))
     elif google_pr and google_pr.fetched and google_pr.ga4_status and google_pr.ga4_status != "ok":
         # Surface why we couldn't compute cross-reference — operator visibility.

@@ -62,6 +62,11 @@ class CampaignPerf:
     ga4_sessions: int | None = None
     ga4_conversions: float | None = None
     ga4_revenue: float | None = None
+    # Per-landing-page GA4 breakdown, populated by
+    # enrich_google_with_landing_pages. Empty list = either not enriched yet
+    # or genuinely no paid landing rows. The PlatformResult's
+    # ga4_landing_status disambiguates.
+    ga4_landing_pages: list["LandingPagePerf"] = field(default_factory=list)
 
     @property
     def cpa(self) -> float | None:
@@ -121,6 +126,20 @@ class GA4Metrics:
     engaged_sessions: int
     conversions: float
     revenue: float
+
+
+@dataclass
+class LandingPagePerf:
+    """One paid landing page for one Google Ads campaign, 7-day rollup.
+
+    Sourced from GA4's `landingPage` dimension (session entry page, query
+    string stripped) — not `pagePath`, which would double-count any page
+    visited mid-session. The campaign attribution comes from
+    `sessionGoogleAdsCampaignId` on the same row.
+    """
+    page_path: str
+    sessions: int
+    conversions: float
 
 
 class MissingCredentialsError(RuntimeError):
@@ -301,6 +320,47 @@ class GoogleAnalyticsClient:
                 conversions=float(row.metric_values[2].value or 0),
                 revenue=float(row.metric_values[3].value or 0),
             )
+        return out
+
+    def fetch_paid_landing_pages_7d(self) -> dict[str, list[LandingPagePerf]]:
+        """Return {google_ads_campaign_id: [LandingPagePerf, ...]} for the last 7 days.
+
+        Groups GA4 paid-Google sessions by (campaign id, landing page).
+        Rows where `sessionGoogleAdsCampaignId` is empty/"(not set)" are
+        excluded — same filter as fetch_paid_google_metrics_7d.
+        """
+        from google.analytics.data_v1beta import BetaAnalyticsDataClient  # type: ignore
+        from google.analytics.data_v1beta.types import (  # type: ignore
+            DateRange,
+            Dimension,
+            Metric,
+            RunReportRequest,
+        )
+
+        client = BetaAnalyticsDataClient()
+        start, end = _last_7_days()
+        req = RunReportRequest(
+            property=f"properties/{self.property_id}",
+            date_ranges=[DateRange(start_date=start, end_date=end)],
+            dimensions=[
+                Dimension(name="sessionGoogleAdsCampaignId"),
+                Dimension(name="landingPage"),
+            ],
+            metrics=[Metric(name="sessions"), Metric(name="conversions")],
+            limit=10000,
+        )
+        response = client.run_report(req)
+        out: dict[str, list[LandingPagePerf]] = {}
+        for row in response.rows:
+            cid = row.dimension_values[0].value
+            if not cid or cid == "(not set)":
+                continue
+            page = row.dimension_values[1].value or "/"
+            out.setdefault(cid, []).append(LandingPagePerf(
+                page_path=page,
+                sessions=int(row.metric_values[0].value or 0),
+                conversions=float(row.metric_values[1].value or 0),
+            ))
         return out
 
 
