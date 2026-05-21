@@ -164,27 +164,79 @@ MIN_PAID_SESSIONS_FOR_LANDING_FLAG = 20
 MAX_LANDING_FLAGS = 5
 
 
+def _prev_campaign_lookup(prev: dict | None) -> dict[tuple[str, str], dict]:
+    """Index prior snapshot's campaign rows by (platform, campaign_id)."""
+    if not prev:
+        return {}
+    out: dict[tuple[str, str], dict] = {}
+    for plat in prev.get("platforms", []):
+        for c in plat.get("campaigns", []):
+            out[(c["platform"], c["campaign_id"])] = c
+    return out
+
+
+def _consent_gap_from_raw(clicks: int | None, sessions: int | None) -> float | None:
+    """Same formula as CampaignPerf.consent_gap_pct, applied to raw dict
+    fields from a snapshot. Returns None when the inputs aren't available."""
+    if clicks is None or sessions is None or clicks == 0:
+        return None
+    gap = clicks - sessions
+    if gap <= 0:
+        return 0.0
+    return (gap / clicks) * 100.0
+
+
+def _attribution_gap_from_raw(conv: float | None, ga4_conv: float | None) -> float | None:
+    if conv is None or ga4_conv is None or conv == 0:
+        return None
+    return (abs(conv - ga4_conv) / conv) * 100.0
+
+
+def _trend_suffix(current: float | None, previous: float | None) -> str:
+    """Compose ' (Xpp w/w)' for a percentage-point delta. Returns '' when
+    the delta is unavailable or tiny (<1pp — noise threshold)."""
+    if current is None or previous is None:
+        return ""
+    delta = current - previous
+    if abs(delta) < 1.0:
+        return ""
+    sign = "+" if delta > 0 else ""
+    return f" ({sign}{delta:.0f}pp w/w)"
+
+
 def _tracking_flags(r: AuditReport) -> list[str]:
     """Return one human-readable line per Google Ads campaign that crossed
     a cross-reference threshold worth surfacing in the report.
     """
     flags: list[str] = []
+    prev_idx = _prev_campaign_lookup(r.prev_snapshot)
     for pr in r.platforms:
         if pr.platform != "google" or not pr.fetched:
             continue
         for c in pr.campaigns:
             name = _truncate(c.campaign_name, 40)
+            prev_row = prev_idx.get((c.platform, c.campaign_id))
             gap = c.consent_gap_pct
             if gap is not None and gap >= CONSENT_GAP_FLAG_PCT:
+                prev_gap = _consent_gap_from_raw(
+                    prev_row.get("clicks") if prev_row else None,
+                    prev_row.get("ga4_sessions") if prev_row else None,
+                )
+                trend = _trend_suffix(gap, prev_gap)
                 flags.append(
-                    f"  ⚠ {name}: {gap:.0f}% consent gap "
+                    f"  ⚠ {name}: {gap:.0f}% consent gap{trend} "
                     f"({c.clicks} Ads clicks → {c.ga4_sessions} GA4 sessions). "
                     f"Likely GDPR consent rejection or broken tracking."
                 )
             attr = c.attribution_gap_pct
             if attr is not None and attr >= ATTRIBUTION_GAP_FLAG_PCT:
+                prev_attr = _attribution_gap_from_raw(
+                    prev_row.get("conversions") if prev_row else None,
+                    prev_row.get("ga4_conversions") if prev_row else None,
+                )
+                trend = _trend_suffix(attr, prev_attr)
                 flags.append(
-                    f"  ⚠ {name}: {attr:.0f}% attribution gap "
+                    f"  ⚠ {name}: {attr:.0f}% attribution gap{trend} "
                     f"(Ads: {c.conversions:.0f} conv vs GA4: {c.ga4_conversions:.0f} conv). "
                     f"Check attribution window and conversion event wiring."
                 )

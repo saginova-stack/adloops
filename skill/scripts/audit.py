@@ -89,6 +89,10 @@ class AuditReport:
     # outside of --no-mutate mode (the normal run records them in
     # actions_taken / pending_approvals instead).
     previewed_actions: list[dict[str, Any]] = field(default_factory=list)
+    # The prior run's snapshot if one exists. Held here (not snapshotted)
+    # so the renderer can compute week-over-week trends on the
+    # cross-reference signals without re-reading the archive.
+    prev_snapshot: dict[str, Any] | None = None
 
 
 def _safe_pct(now: float, prev: float | None) -> float | None:
@@ -355,5 +359,6 @@ def run_audit(
         actions_taken=[],
         pending_approvals=[],
         recommendations=_rule_based_recommendations(deltas),
+        prev_snapshot=prev,
     )
     return report

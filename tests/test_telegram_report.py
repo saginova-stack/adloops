@@ -205,6 +205,119 @@ def test_tracking_section_shows_ga4_skip_reason():
     assert "GA4_PROPERTY_ID" in out
 
 
+def test_consent_gap_shows_week_over_week_trend_when_prev_snapshot_present():
+    """When a prior snapshot exists, the consent-gap line gets a 'Xpp w/w'
+    suffix so the operator can tell a worsening gap from a stable bad one."""
+    # Current: 200 clicks → 100 sessions = 50% gap
+    # Prior:   200 clicks → 160 sessions = 20% gap
+    # Delta: +30pp
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_id="C1", campaign_name="EU brand",
+           clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "C1",
+                "clicks": 200, "ga4_sessions": 160,
+                "conversions": 4.0, "ga4_conversions": 4.0,
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "50% consent gap (+30pp w/w)" in out
+
+
+def test_consent_gap_trend_omitted_when_no_prev_snapshot():
+    """First run has no prior — the trend suffix must be absent, not
+    rendered as '+50pp w/w' off a None baseline."""
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_id="C1", campaign_name="EU brand",
+           clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    r = make_report(platforms=[pr], prev_snapshot=None)
+    out = "\n\n".join(render_report(r))
+    assert "50% consent gap" in out
+    assert "w/w" not in out
+
+
+def test_consent_gap_trend_suppressed_when_delta_is_noise():
+    """A 0.5pp drift isn't worth surfacing — keeps the report quiet when
+    nothing changed. Threshold lives in _trend_suffix."""
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_id="C1", campaign_name="EU brand",
+           clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    # Prior 199 clicks → 100 sessions = ~49.7% — 0.25pp delta, below noise floor.
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "C1",
+                "clicks": 199, "ga4_sessions": 100,
+                "conversions": 4.0, "ga4_conversions": 4.0,
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "consent gap" in out
+    assert "w/w" not in out
+
+
+def test_attribution_gap_shows_trend_too():
+    """Symmetric to consent gap — the second cross-reference signal
+    also benefits from the directional context."""
+    # Current: Ads 10 / GA4 14 → 40% gap
+    # Prior:   Ads 10 / GA4 12 → 20% gap
+    # Delta: +20pp
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_id="C2", campaign_name="Search US",
+           clicks=200, ga4_sessions=190, conversions=10.0, ga4_conversions=14.0),
+    ])
+    pr.ga4_status = "ok"
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "C2",
+                "clicks": 200, "ga4_sessions": 190,
+                "conversions": 10.0, "ga4_conversions": 12.0,
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "attribution gap" in out
+    assert "+20pp w/w" in out
+
+
+def test_trend_shows_minus_sign_on_improving_gap():
+    """A shrinking gap is good news — operator wants to see '-Xpp' not
+    just absence of the suffix. Confirms the sign is rendered correctly."""
+    # Current 50% gap (200 clicks / 100 sessions)
+    # Prior 70% gap (200 clicks / 60 sessions). Delta: -20pp (improving).
+    pr = PlatformResult("google", True, True, None, [
+        cp(campaign_id="C1", campaign_name="EU brand",
+           clicks=200, ga4_sessions=100, conversions=4.0, ga4_conversions=4.0),
+    ])
+    pr.ga4_status = "ok"
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "C1",
+                "clicks": 200, "ga4_sessions": 60,
+                "conversions": 4.0, "ga4_conversions": 4.0,
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "(-20pp w/w)" in out
+
+
 def test_tracking_section_only_flags_google_campaigns():
     # Meta campaign with the same "consent gap" shape — should be ignored
     # because Meta doesn't have a GA4 cross-reference.
