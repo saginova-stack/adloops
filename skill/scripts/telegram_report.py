@@ -9,7 +9,11 @@ Spec format per run:
 2. Headline metrics — spend / impressions / clicks / conversions / CPA / ROAS, deltas
 3. Top movers — 3 best, 3 worst with concrete numbers
 4. Tracking & consent — consent gap / attribution gap flags from GA4 cross-reference (Google Ads only), plus paid landing pages with 0 conversions
-5. Actions taken — every auto-mutation with $ impact (P1: empty)
+5. Actions taken — every auto-mutation with $ impact (P1: empty).
+   Under --no-mutate this slot is replaced by "Would have fired"
+   showing every proposal and the guardrail verdict it would have
+   received, so the operator can build trust during the observation
+   weeks before going live.
 6. Pending approvals — anything blocked by guardrails (P1: empty)
 7. Recommendations — 3-5 things suggested but not auto-executed
 
@@ -109,6 +113,28 @@ def _action_line(a: dict) -> str:
     detail = _action_detail(mut)
     detail_str = f" — {detail}" if detail else ""
     return f"  • [{_platform_emoji(plat)}] {name}: {kind}{detail_str} ({suffix})"
+
+
+def _preview_line(a: dict) -> str:
+    """Format one row from `previewed_actions` (--no-mutate output).
+
+    Same dict shape as actions_taken/pending_approvals — the output of
+    `guardrails.serialize_result()`. We surface the would-be decision
+    (AUTO/APPROVAL/REJECTED) so the operator can see how the proposer
+    AND guardrails would have interacted, not just what got proposed.
+    """
+    mut = a.get("mutation", {})
+    plat = mut.get("platform", "?")
+    name = mut.get("campaign_name", mut.get("campaign_id", "?"))
+    kind = mut.get("kind", "?")
+    decision = a.get("decision", "?")
+    explanation = a.get("explanation", "")
+    detail = _action_detail(mut)
+    detail_str = f" — {detail}" if detail else ""
+    return (
+        f"  • [{_platform_emoji(plat)}] {name}: {kind}{detail_str} "
+        f"[{decision.upper()}] {explanation}"
+    )
 
 
 def _action_detail(mut: dict) -> str:
@@ -243,8 +269,13 @@ def render_report(r: AuditReport) -> list[str]:
         # Surface why we couldn't compute cross-reference — operator visibility.
         sections.append(f"Tracking & consent: GA4 enrichment {google_pr.ga4_status}")
 
-    # 5) Actions taken
-    if r.actions_taken:
+    # 5) Actions taken — OR previewed actions when running --no-mutate
+    if r.previewed_actions:
+        lines = ["Would have fired (--no-mutate observation):"]
+        for a in r.previewed_actions:
+            lines.append(_preview_line(a))
+        sections.append("\n".join(lines))
+    elif r.actions_taken:
         lines = ["Actions taken:"]
         for a in r.actions_taken:
             lines.append(_action_line(a))

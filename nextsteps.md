@@ -114,23 +114,20 @@ Run from the OpenClaw server. Full step-by-step is in
 
 9. **Cron — observation-only first**
 
-   Run for the first 2 weeks in audit-only mode while you watch the
-   audit log:
+   Run for the first 2 weeks in observation mode. Under `--no-mutate`
+   the report now includes a "Would have fired" section showing every
+   proposal with the guardrail verdict (AUTO / APPROVAL / REJECTED)
+   that would have applied — so you see how the rules behave on your
+   actual campaigns before they touch anything:
 
    ```cron
    0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --no-mutate
    ```
 
-   Or to see what mutations *would* fire (without applying):
-
-   ```cron
-   0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --dry-run
-   ```
-
    When you trust the proposer, flip to full mode by dropping
-   `--no-mutate` / `--dry-run`. Mutations cap at 10 per run and every
-   one is gated by guardrails (±20% budget, new campaigns PAUSED,
-   optional cross-platform spend ceiling).
+   `--no-mutate`. Mutations cap at `guardrails.proposer.maxProposalsPerRun`
+   per run (default 10) and every one is gated by guardrails (±20%
+   budget, new campaigns PAUSED, optional cross-platform spend ceiling).
 
 10. **Read `.audit.jsonl` after every run in the first month**
 
@@ -138,8 +135,8 @@ Run from the OpenClaw server. Full step-by-step is in
     JSONL line per guardrail decision (AUTO / APPROVAL / REJECTED) with
     `run_id`, `platform`, `campaign_id`, `kind`, `before`, `after`,
     `rule`, `applied`. Confirm the AUTO decisions look sane; if not,
-    tune the constants in `skill/scripts/mutations.py` or switch back
-    to `--no-mutate`.
+    tune `guardrails.proposer` in brand.json or switch back to
+    `--no-mutate`.
 
 ---
 
@@ -181,7 +178,7 @@ for 1 week → full mode.
 ## Where things live
 
 - **Code**: `/home/ubuntu/adloops/skill/scripts/`
-- **Tests**: `/home/ubuntu/adloops/tests/` (187 passing — `.venv/bin/pytest tests/ -q`)
+- **Tests**: `/home/ubuntu/adloops/tests/` (190 passing — `.venv/bin/pytest tests/ -q`)
 - **Vendored MCPs**: `/home/ubuntu/adloops/skill/mcp-servers/{adloop,linkedin-ads}/`
 - **Brand config (not yet present)**: `~/Syncthing/adloops-brand/brand.json`
 - **Audit log (not yet present)**: `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`

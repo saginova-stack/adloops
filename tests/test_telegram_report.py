@@ -308,6 +308,69 @@ def test_landing_flag_renders_alongside_consent_flag_in_one_section():
     assert "/dead" in section
 
 
+def test_previewed_actions_replace_actions_taken_section():
+    """Under --no-mutate the run.py path populates previewed_actions
+    instead of actions_taken. The report must surface the would-be
+    decisions, NOT 'no mutations proposed' (which would be misleading
+    when proposals actually existed but didn't ship)."""
+    preview_row = {
+        "decision": "auto",
+        "rule": "always_allow_pause",
+        "explanation": "Pausing is always allowed.",
+        "mutation": {
+            "platform": "google",
+            "campaign_id": "Z1",
+            "campaign_name": "Zombie ads",
+            "kind": "pause",
+            "before": {"status": "ENABLED"},
+            "after": {"status": "PAUSED"},
+            "reason": "$200 spend, 0 conv.",
+        },
+    }
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        previewed_actions=[preview_row],
+    )
+    out = "\n\n".join(render_report(r))
+    assert "Would have fired (--no-mutate observation):" in out
+    assert "Zombie ads" in out
+    assert "[AUTO]" in out
+    # The misleading default copy must not appear when there's preview content.
+    assert "no mutations proposed this run" not in out
+    # And the live "Actions taken:" header must not be used in preview mode.
+    assert "Actions taken:" not in out
+
+
+def test_previewed_actions_show_each_decision_kind():
+    """The whole point of --no-mutate is seeing the decision distribution
+    (AUTO vs APPROVAL vs REJECTED) so the operator can tune brand.json
+    before flipping mutations on. All three decisions must render."""
+    rows = []
+    for decision, name in (("auto", "Z"), ("approval", "Big"), ("rejected", "Bad")):
+        rows.append({
+            "decision": decision,
+            "rule": "x",
+            "explanation": f"sample {decision} verdict",
+            "mutation": {
+                "platform": "google",
+                "campaign_id": name,
+                "campaign_name": name,
+                "kind": "budget_change",
+                "before": {"daily_budget": 100.0},
+                "after": {"daily_budget": 80.0},
+                "reason": "r",
+            },
+        })
+    r = make_report(
+        platforms=[PlatformResult("google", True, True, None, [cp()])],
+        previewed_actions=rows,
+    )
+    out = "\n\n".join(render_report(r))
+    assert "[AUTO]" in out
+    assert "[APPROVAL]" in out
+    assert "[REJECTED]" in out
+
+
 def test_landing_flag_section_omitted_when_landing_pages_clean():
     pr = PlatformResult("google", True, True, None, [
         _cp_with_landing([

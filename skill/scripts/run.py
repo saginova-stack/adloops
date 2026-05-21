@@ -63,6 +63,24 @@ def _emit_failure_to_telegram(reason: str, *, dry_run: bool) -> None:
 # Mutation pipeline (Phase 2)
 # ---------------------------------------------------------------------------
 
+def _run_no_mutate_preview(report: audit.AuditReport, brand) -> None:
+    """Propose + guardrail check, then surface as previewed_actions only.
+
+    For the recommended 2-week observation phase: shows the operator what
+    AUTO/APPROVAL/REJECTED decisions the proposer would have made on
+    today's data, so they can build trust in the rules before flipping
+    mutations on. No dispatch, no audit-log writes — just a window.
+    """
+    proposals = mutations.propose(report, brand)
+    if not proposals:
+        return
+    cfg = guardrails.config_from_brand(brand)
+    for m in proposals:
+        projected = mutations.projected_total_spend(report, [m])
+        d = guardrails.check_mutation(m, cfg, projected_active_daily_spend=projected)
+        report.previewed_actions.append(guardrails.serialize_result(d))
+
+
 def _run_mutations(report: audit.AuditReport, brand, *, dry_run: bool) -> None:
     """Propose → guardrails → dispatch. Mutates `report` in place to populate
     `actions_taken` and `pending_approvals`. Logs every decision to the audit log.
@@ -355,6 +373,14 @@ def main(argv: list[str] | None = None) -> int:
         except Exception as e:  # noqa: BLE001 — never let mutations crash the run
             tb = traceback.format_exc()
             print(f"[adloops] mutation pipeline crashed: {e}\n{tb[:1500]}", file=sys.stderr)
+    else:
+        # Operator is observing: show what *would* have happened without
+        # touching anything. Same crash-isolation as the live pipeline.
+        try:
+            _run_no_mutate_preview(report, brand)
+        except Exception as e:  # noqa: BLE001
+            tb = traceback.format_exc()
+            print(f"[adloops] preview pipeline crashed: {e}\n{tb[:1500]}", file=sys.stderr)
 
     # 4b) Upgrade recommendations to the LLM chain when a key is available.
     # Falls back to the rule-based section silently if no key is set or the

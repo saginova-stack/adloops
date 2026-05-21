@@ -84,6 +84,11 @@ class AuditReport:
     actions_taken: list[dict[str, Any]]            # P1: empty
     pending_approvals: list[dict[str, Any]]        # P1: empty
     recommendations: list[str]                     # P1: rule-based, no LLM yet
+    # --no-mutate observation surface: every proposal that would have been
+    # AUTO/APPROVAL/REJECTED if the mutation pipeline had been live. Empty
+    # outside of --no-mutate mode (the normal run records them in
+    # actions_taken / pending_approvals instead).
+    previewed_actions: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _safe_pct(now: float, prev: float | None) -> float | None:

@@ -195,7 +195,11 @@ def test_mutations_run_and_populate_actions_taken(tmp_path, monkeypatch):
     assert dispatched == [("pause", "ZOMBIE", True)]
 
 
-def test_no_mutate_flag_skips_mutation_pipeline(tmp_path, monkeypatch):
+def test_no_mutate_flag_runs_preview_not_dispatch(tmp_path, monkeypatch):
+    """Under --no-mutate the proposer DOES run (for the report's
+    'Would have fired' section) but executors must never be reached.
+    Verifies the observation-mode contract.
+    """
     bdir = _good_brand(tmp_path)
     monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
     monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: _report_with_zombie())
@@ -203,16 +207,43 @@ def test_no_mutate_flag_skips_mutation_pipeline(tmp_path, monkeypatch):
     monkeypatch.setattr(run_mod.telegram_report, "send_messages",
                         lambda msgs, dry_run=False: [])
 
-    called = {"flag": False}
+    dispatched: list = []
+    monkeypatch.setattr(run_mod.executors, "dispatch",
+                        lambda *a, **kw: dispatched.append(("dispatch", a, kw)) or {"ok": True})
 
-    def boom(*a, **kw):
-        called["flag"] = True
-        raise AssertionError("mutations should not be proposed")
-
-    monkeypatch.setattr(run_mod.mutations, "propose", boom)
     rc = run_mod.main(["--dry-run", "--no-mutate"])
     assert rc == 0
-    assert called["flag"] is False
+    # No real executor calls — that's the whole point of --no-mutate.
+    assert dispatched == []
+
+
+def test_no_mutate_populates_previewed_actions(tmp_path, monkeypatch):
+    """The preview section is what makes --no-mutate worth running for two
+    weeks instead of silently. Confirm the proposer's would-have-fired
+    rows actually land on report.previewed_actions."""
+    bdir = _good_brand(tmp_path)
+    monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(bdir))
+
+    captured_reports: list = []
+    def capture_send(msgs, dry_run=False):
+        captured_reports.append(list(msgs))
+        return []
+
+    monkeypatch.setattr(run_mod.audit, "run_audit", lambda enabled: _report_with_zombie())
+    monkeypatch.setattr(run_mod.audit, "write_snapshot", lambda r: bdir / "x.json")
+    monkeypatch.setattr(run_mod.telegram_report, "send_messages", capture_send)
+    monkeypatch.setattr(run_mod.executors, "dispatch",
+                        lambda *a, **kw: (_ for _ in ()).throw(AssertionError("must not dispatch")))
+
+    rc = run_mod.main(["--dry-run", "--no-mutate"])
+    assert rc == 0
+    combined = "\n".join(captured_reports[0]) if captured_reports else ""
+    assert "Would have fired" in combined
+    # The zombie campaign produces a pause proposal; the preview row should
+    # carry the AUTO verdict from guardrails, and identify the campaign.
+    assert "Zombie" in combined
+    assert "[AUTO]" in combined
+    assert "pause" in combined
 
 
 def test_mutation_crash_does_not_crash_run(tmp_path, monkeypatch, capsys):
