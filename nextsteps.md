@@ -181,7 +181,7 @@ for 1 week → full mode.
 ## Where things live
 
 - **Code**: `/home/ubuntu/adloops/skill/scripts/`
-- **Tests**: `/home/ubuntu/adloops/tests/` (178 passing — `.venv/bin/pytest tests/ -q`)
+- **Tests**: `/home/ubuntu/adloops/tests/` (187 passing — `.venv/bin/pytest tests/ -q`)
 - **Vendored MCPs**: `/home/ubuntu/adloops/skill/mcp-servers/{adloop,linkedin-ads}/`
 - **Brand config (not yet present)**: `~/Syncthing/adloops-brand/brand.json`
 - **Audit log (not yet present)**: `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`

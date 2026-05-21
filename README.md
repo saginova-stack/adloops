@@ -30,7 +30,7 @@ adloops/
 │   └── mcp-servers/             ← vendored submodules
 │       ├── adloop/              → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
 │       └── linkedin-ads/        → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                       ← 178 tests covering every module
+├── tests/                       ← 187 tests covering every module
 ├── install.sh                   ← one-shot first-run install (uv + submodule build + venv)
 ├── setup.md                     ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt
@@ -48,6 +48,7 @@ adloops/
 Run modes:
 
 ```bash
+python -m scripts.run --check                 # preflight: brand.json + per-platform env + live Telegram ping. Run this first.
 python -m scripts.run                         # full pipeline: audit, dispatch AUTO mutations, send to Telegram
 python -m scripts.run --dry-run               # no real side effects (executors run in preview mode)
 python -m scripts.run --no-mutate             # audit + report only (Phase 1 behaviour)

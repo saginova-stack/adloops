@@ -6,7 +6,7 @@ of the repo, what's blocking forward progress, and the concrete next actions.
 ## State as of 2026-05-20
 
 - **Phases 1, 2, and 3 (LinkedIn executor) code-complete.** Phase 3 is tested against MCP mocks; going live still needs LinkedIn Marketing Developer Platform approval on the app plus a one-time `node dist/auth-cli.js` to seed the token store.
-- **178 tests passing.**
+- **187 tests passing.**
 - **Skill installed live** at `~/.openclaw/workspace/skills/adloops` (symlink → `~/adloops/skill/`).
 - **No remote configured.** `git remote -v` shows nothing — push when you decide where this lives (likely a private GitHub repo since `brand.json` will reference real ICP details).
 
@@ -44,6 +44,7 @@ Every AUTO/APPROVAL/REJECTED decision writes one JSONL line to `.audit.jsonl`. T
 
 CLI flags:
 - `python -m scripts.run` — full pipeline, sends to Telegram
+- `python -m scripts.run --check` — operator preflight: validates brand.json, instantiates each platform's read client, live-pings Telegram (getMe + getChat). Exits 0 if green.
 - `python -m scripts.run --dry-run` — no Telegram, executors run in preview mode (no real changes)
 - `python -m scripts.run --no-mutate` — audit + report only (Phase 1 behaviour)
 - `python -m scripts.run --approve <run_id>:<index>` — replay one APPROVAL row
@@ -94,7 +95,7 @@ After every run in the first month, read `~/Syncthing/adloops-brand/campaigns/.a
 
 ```bash
 cd /home/ubuntu/adloops
-.venv/bin/pytest tests/ -q          # confirm 178 pass
+.venv/bin/pytest tests/ -q          # confirm 187 pass
 git log --oneline -10               # confirm latest commit is HEAD
 ls /home/ubuntu/.openclaw/workspace/skills/adloops/SKILL.md   # confirm symlink intact
 ls skill/mcp-servers/adloop/pyproject.toml                    # confirm submodule present

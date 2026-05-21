@@ -1,7 +1,7 @@
 """AdLoops entrypoint.
 
 Usage:
-  python -m scripts.run [--scaffold] [--dry-run] [--no-send] [--no-mutate]
+  python -m scripts.run [--scaffold] [--check] [--dry-run] [--no-send] [--no-mutate]
   python -m scripts.run --approve <run_id>:<index>
 
 Behavior:
@@ -287,6 +287,10 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="adloops", description="Run an AdLoops audit cycle.")
     p.add_argument("--scaffold", action="store_true",
                    help="Create the brand directory + placeholder brand.json and exit.")
+    p.add_argument("--check", action="store_true",
+                   help="Operator preflight: validate brand.json, instantiate each platform's "
+                        "read client (env-var check, no live API calls), live-ping Telegram "
+                        "(getMe + getChat). Exits 0 if everything's green, 1 otherwise.")
     p.add_argument("--dry-run", action="store_true",
                    help="Skip Telegram send; pass dry_run=True to all executors so no real "
                         "mutations are made. Prints the rendered report to stdout.")
@@ -308,7 +312,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Edit {bjson} and replace the example values with your own.")
         return 0
 
-    # 1b) Approve mode
+    # 1b) Preflight mode
+    if args.check:
+        from . import preflight
+        return preflight.run()
+
+    # 1c) Approve mode
     if args.approve:
         return _run_approve(args.approve, dry_run=dry)
 

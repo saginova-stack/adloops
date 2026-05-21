@@ -188,7 +188,36 @@ then hitting:
 curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" | jq '.result[-1].message.chat.id'
 ```
 
-## 5. Cron / scheduling
+## 5. Preflight — run this before scheduling
+
+Once you've wired credentials and dropped `brand.json` in place, run:
+
+```bash
+.venv/bin/python -m scripts.run --check
+```
+
+The preflight does four things, each one line of output:
+
+1. Loads and validates `brand.json` (catches missing personas, malformed
+   guardrails block, etc.).
+2. Tries to construct each enabled platform's read client to confirm env
+   vars are present (no live API call, so no quota cost).
+3. Tries to construct the GA4 client — surfaces a `[warn]` if missing,
+   not a `[FAIL]`, since enrichment is optional.
+4. Hits the Telegram bot API live: `getMe` confirms the token is valid,
+   `getChat` confirms the bot is actually a member of your chat. This
+   catches the single most common first-run mistake (right token, wrong
+   chat id).
+
+Exit code is `0` if everything's green, `1` if anything's red. Wire this
+into a deploy gate if you like.
+
+Note: `--check` does NOT make live API calls to Google Ads / Meta /
+LinkedIn — for that, run `.venv/bin/python -m scripts.run --dry-run`,
+which exercises every read client end-to-end without applying any
+mutations.
+
+## 6. Cron / scheduling
 
 Suggested cadence per spec: **Tuesday and Friday at 09:00 local time**. On the
 OC server (Linux):
@@ -209,7 +238,7 @@ If you use OC's cron skill instead, the equivalent shell command is:
 cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
 ```
 
-## 6. Operational
+## 7. Operational
 
 - **Audit log**: every guardrail decision (AUTO / APPROVAL / REJECTED) writes
   a JSONL line to `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`. Read it
@@ -230,7 +259,7 @@ cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
   row not found · 10 `--approve` re-check still APPROVAL · 11 `--approve`
   dispatch failed.
 
-## 7. Things still on Michiel's plate
+## 8. Things still on Michiel's plate
 
 - [ ] LinkedIn MDP application submitted (1–5 day approval)
 - [ ] Google Ads developer token applied for
