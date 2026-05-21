@@ -6,7 +6,7 @@ of the repo, what's blocking forward progress, and the concrete next actions.
 ## State as of 2026-05-20
 
 - **Phases 1, 2, and 3 (LinkedIn executor) code-complete.** Phase 3 is tested against MCP mocks; going live still needs LinkedIn Marketing Developer Platform approval on the app plus a one-time `node dist/auth-cli.js` to seed the token store.
-- **195 tests passing.**
+- **198 tests passing.**
 - **Skill installed live** at `~/.openclaw/workspace/skills/adloops` (symlink → `~/adloops/skill/`).
 - **No remote configured.** `git remote -v` shows nothing — push when you decide where this lives (likely a private GitHub repo since `brand.json` will reference real ICP details).
 
@@ -95,7 +95,7 @@ After every run in the first month, read `~/Syncthing/adloops-brand/campaigns/.a
 
 ```bash
 cd /home/ubuntu/adloops
-.venv/bin/pytest tests/ -q          # confirm 195 pass
+.venv/bin/pytest tests/ -q          # confirm 198 pass
 git log --oneline -10               # confirm latest commit is HEAD
 ls /home/ubuntu/.openclaw/workspace/skills/adloops/SKILL.md   # confirm symlink intact
 ls skill/mcp-servers/adloop/pyproject.toml                    # confirm submodule present

@@ -144,15 +144,7 @@ Run from the OpenClaw server. Full step-by-step is in
 
 Pick any combination. Each is ~1 commit. Listed in recommended order:
 
-### 1. Landing-page trend signals — recommended next
-
-The trend logic now surfaces deltas on consent-gap and attribution-gap.
-Landing pages don't have a w/w trend yet — extend the same pattern:
-"/features: 80 paid sessions (+30 w/w), 0 conversions" so an operator
-can tell a new dud from a chronic one. Reuses `prev_snapshot` already
-on `AuditReport`.
-
-### 2. Batch LinkedIn AUTOs on one MCP session
+### 1. Batch LinkedIn AUTOs on one MCP session — recommended next
 
 `run.py` currently routes Meta and LinkedIn AUTOs through `_dispatch_one()`
 (spawn-per-call). Meta is HTTP so there's no spawn cost; LinkedIn is a
@@ -179,7 +171,7 @@ for 1 week → full mode.
 ## Where things live
 
 - **Code**: `/home/ubuntu/adloops/skill/scripts/`
-- **Tests**: `/home/ubuntu/adloops/tests/` (195 passing — `.venv/bin/pytest tests/ -q`)
+- **Tests**: `/home/ubuntu/adloops/tests/` (198 passing — `.venv/bin/pytest tests/ -q`)
 - **Vendored MCPs**: `/home/ubuntu/adloops/skill/mcp-servers/{adloop,linkedin-ads}/`
 - **Brand config (not yet present)**: `~/Syncthing/adloops-brand/brand.json`
 - **Audit log (not yet present)**: `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`

@@ -254,12 +254,42 @@ def _tracking_flags(r: AuditReport) -> list[str]:
     return flags
 
 
+def _prev_landing_lookup(prev: dict | None) -> dict[tuple[str, str, str], dict]:
+    """Index prior snapshot's landing-page rows by (plat, cid, page_path)."""
+    if not prev:
+        return {}
+    out: dict[tuple[str, str, str], dict] = {}
+    for plat in prev.get("platforms", []):
+        for c in plat.get("campaigns", []):
+            for lp in c.get("ga4_landing_pages") or []:
+                key = (c["platform"], c["campaign_id"], lp.get("page_path", ""))
+                out[key] = lp
+    return out
+
+
+# Absolute-session noise floor for landing-page w/w trends. Landing pages
+# already have a 20-session minimum to be flagged at all — anything below
+# this small a delta isn't worth the visual noise.
+LANDING_SESSION_TREND_NOISE = 10
+
+
+def _landing_trend_suffix(now_sessions: int, prev_sessions: int | None) -> str:
+    if prev_sessions is None:
+        return ""
+    delta = now_sessions - prev_sessions
+    if abs(delta) < LANDING_SESSION_TREND_NOISE:
+        return ""
+    sign = "+" if delta > 0 else ""
+    return f" ({sign}{delta} w/w)"
+
+
 def _landing_page_flags(r: AuditReport) -> list[str]:
     """One line per (campaign, landing page) pair with material paid
     traffic and zero GA4 conversions. Top-N by sessions desc so the
     message stays bounded when many pages qualify.
     """
     candidates: list[tuple[int, str]] = []  # (sessions, line)
+    prev_lp = _prev_landing_lookup(r.prev_snapshot)
     for pr in r.platforms:
         if pr.platform != "google" or not pr.fetched:
             continue
@@ -273,9 +303,14 @@ def _landing_page_flags(r: AuditReport) -> list[str]:
                 if lp.conversions > 0:
                     continue
                 page = _truncate(lp.page_path, 50)
+                prev_row = prev_lp.get((c.platform, c.campaign_id, lp.page_path))
+                trend = _landing_trend_suffix(
+                    lp.sessions,
+                    prev_row.get("sessions") if prev_row else None,
+                )
                 line = (
                     f"  ⚠ {name}: landing {page} — "
-                    f"{lp.sessions} paid sessions, 0 conversions."
+                    f"{lp.sessions} paid sessions{trend}, 0 conversions."
                 )
                 candidates.append((lp.sessions, line))
     candidates.sort(reverse=True)

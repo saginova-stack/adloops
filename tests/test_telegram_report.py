@@ -484,6 +484,67 @@ def test_previewed_actions_show_each_decision_kind():
     assert "[REJECTED]" in out
 
 
+def test_landing_flag_shows_w_w_session_trend_when_prev_snapshot_present():
+    """Same problem the consent-gap trend solves: telling a new dud
+    landing page from a chronic one. Session delta is rendered as an
+    absolute number (not pp) because landing pages think in counts."""
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([{"page_path": "/features", "sessions": 80, "conversions": 0.0}]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "1",
+                "ga4_landing_pages": [
+                    {"page_path": "/features", "sessions": 30, "conversions": 0.0},
+                ],
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "/features" in out
+    assert "80 paid sessions (+50 w/w)" in out
+
+
+def test_landing_flag_trend_omitted_when_no_prev():
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([{"page_path": "/dead", "sessions": 60, "conversions": 0.0}]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    r = make_report(platforms=[pr], prev_snapshot=None)
+    out = "\n\n".join(render_report(r))
+    assert "60 paid sessions" in out
+    assert "w/w" not in out
+
+
+def test_landing_flag_trend_suppressed_below_noise_floor():
+    """A 3-session delta on a 25-session baseline isn't a signal; the
+    suffix would just add visual clutter to a probably-stable problem."""
+    pr = PlatformResult("google", True, True, None, [
+        _cp_with_landing([{"page_path": "/dead", "sessions": 25, "conversions": 0.0}]),
+    ])
+    pr.ga4_status = "ok"
+    pr.ga4_landing_status = "ok"
+    prev = {
+        "platforms": [{
+            "campaigns": [{
+                "platform": "google", "campaign_id": "1",
+                "ga4_landing_pages": [
+                    {"page_path": "/dead", "sessions": 22, "conversions": 0.0},
+                ],
+            }],
+        }],
+    }
+    r = make_report(platforms=[pr], prev_snapshot=prev)
+    out = "\n\n".join(render_report(r))
+    assert "/dead" in out
+    assert "w/w" not in out
+
+
 def test_landing_flag_section_omitted_when_landing_pages_clean():
     pr = PlatformResult("google", True, True, None, [
         _cp_with_landing([
