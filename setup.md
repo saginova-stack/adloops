@@ -112,6 +112,20 @@ GA4_PROPERTY_ID=987654321                 # numeric, e.g. from GA4 → Admin →
 GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 ```
 
+**Finding the two that trip people up** (the wizard usually captures these, but
+if you're filling them by hand):
+
+- **`GOOGLE_ADS_DEVELOPER_TOKEN`** — Google Ads → **Admin → API Center**
+  (direct: <https://ads.google.com/aw/apicenter>). It's a 22-character string.
+  If you've never requested one, that page shows an API-access form instead —
+  submit it to get a Test token immediately.
+- **`GOOGLE_ADS_LOGIN_CUSTOMER_ID`** — your Manager/MCC account's 10-digit
+  Customer ID, shown top-right of Google Ads (next to your account) or in the
+  page URL as `cid=`/`ocid=`. **Enter digits only** (`1234567890`), not the
+  dashed `123-456-7890` shown in the UI. This is the account you authenticate
+  *through*; `GOOGLE_ADS_CUSTOMER_ID` is the specific ad account being audited
+  (the same value if you don't use a manager account).
+
 **Note on GA4 auth.** GA4 supports OAuth user credentials (what the wizard
 sets up) but a service-account JSON is more reliable for a cron context — it
 doesn't expire. To create one: Google Cloud Console → APIs & Services →
