@@ -85,10 +85,34 @@ The vendored `kLOsk/adloop` MCP bundles a wizard that handles both Google Ads
 *and* Google Analytics 4 in one OAuth dance — the same wizard the upstream MCP
 uses interactively.
 
-**Step 1 — apply for a Google Ads developer token:**
-https://developers.google.com/google-ads/api/docs/get-started/dev-token
-(New tokens start as "Test"; you'll need at least "Explorer" to see
-production data — it's granted automatically after your first API call.)
+**Step 1 — get a developer token (requires a Manager/MCC account).**
+
+The developer token lives at the **Manager (MCC)** level only. If Google Ads
+shows you campaign screens but no **Admin → API Center**, you're in a regular ad
+account — create a manager account first
+(<https://ads.google.com/home/tools/manager-accounts>). One-time choices made
+during creation/application that **can't be changed later**:
+
+- **Primary use:** *"Manage other people's accounts"* if you'll ever run AdLoops
+  on clients' accounts (it still covers your own); *"Manage my accounts"* for
+  purely in-house use.
+- **Company type** (on the token form): *Agency/SEM* (matches the manager-account
+  model), or *Independent Google Ads Developer* if you treat AdLoops as a
+  software product.
+- **Intended use** — a description that passes review:
+
+  > Internal tool to manage Google Ads accounts under our manager account. Twice
+  > weekly it uses the API to pull 7-day campaign performance (spend, clicks,
+  > conversions, CPA), cross-reference with GA4, and apply guardrailed changes —
+  > pausing zero-conversion campaigns and adjusting daily budgets within a fixed
+  > per-run % cap. Hard caps and an approval queue gate every change; it reads
+  > reporting data and writes budget/status changes only.
+
+You get a **Test** token on submission (can't read production data); request
+**Explorer** or **Standard** for live accounts. (Docs:
+<https://developers.google.com/google-ads/api/docs/get-started/dev-token>.)
+Finally, **link the ad account you want audited under the MCC** — an empty
+manager account has nothing to audit.
 
 **Step 2 — run the wizard:**
 
