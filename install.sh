@@ -2,8 +2,8 @@
 #
 # AdLoops first-run install.
 #
-# Brings the repo to a state where `python -m scripts.run --dry-run` can be
-# executed end-to-end (assuming creds are wired). Idempotent — safe to re-run.
+# Brings the repo to a state where `cd skill && ../.venv/bin/python -m scripts.run --dry-run`
+# can be executed end-to-end (assuming creds are wired). Idempotent — safe to re-run.
 #
 # What this does:
 #   1. Ensures git submodules are checked out (kLOsk/adloop, linkedin-ads-mcp).
@@ -17,7 +17,7 @@
 #   - Run the OAuth wizards (`uv run adloop init`, `node dist/auth-cli.js`).
 #     Those need interactive input and credentials — operator runs them by
 #     hand. The install above prepares the trees so those commands work.
-#   - Touch `~/Syncthing/adloops-brand/`. Scaffold with `python -m scripts.run --scaffold`.
+#   - Touch `~/Syncthing/adloops-brand/`. Scaffold with `cd skill && ../.venv/bin/python -m scripts.run --scaffold`.
 #   - Modify cron. See setup.md §5 for the cron entry.
 
 set -euo pipefail
@@ -104,13 +104,13 @@ Next steps (in order):
      Then export the resulting env vars (see setup.md §3).
 
   2. Scaffold the brand directory and fill in ICP:
-       .venv/bin/python -m scripts.run --scaffold
+       cd skill && ../.venv/bin/python -m scripts.run --scaffold
        # edit ~/Syncthing/adloops-brand/brand.json
 
   3. Dry-run end to end:
-       .venv/bin/python -m scripts.run --dry-run
+       cd skill && ../.venv/bin/python -m scripts.run --dry-run
 
   4. Schedule (cron entry in setup.md §5):
-       0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
+       0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run
 
 EOF

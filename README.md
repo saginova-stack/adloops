@@ -11,7 +11,7 @@ adloops/
 ├── skill/                       ← the actual skill — symlinked into OC's skills dir
 │   ├── SKILL.md
 │   ├── scripts/
-│   │   ├── run.py               ← entrypoint (`python -m scripts.run`)
+│   │   ├── run.py               ← entrypoint (`python -m scripts.run`, run from skill/)
 │   │   ├── audit.py             ← fetch-all → diff → top movers → GA4 cross-ref → snapshot
 │   │   ├── brand_loader.py
 │   │   ├── guardrails.py        ← hard rules + audit log, wired in front of every mutation
@@ -40,12 +40,13 @@ adloops/
 
 ```bash
 ./install.sh                                  # installs uv, syncs submodules, builds, sets up .venv, runs tests
-.venv/bin/python -m scripts.run --scaffold    # creates ~/Syncthing/adloops-brand
+cd skill                                       # run.py is a module under skill/ — invoke from here
+../.venv/bin/python -m scripts.run --scaffold # creates ~/Syncthing/adloops-brand
 # fill in brand.json + wire creds (see setup.md §3), then:
-.venv/bin/python -m scripts.run --dry-run     # audit + propose + show previews, no real changes, no Telegram
+../.venv/bin/python -m scripts.run --dry-run  # audit + propose + show previews, no real changes, no Telegram
 ```
 
-Run modes:
+Run modes (all from the `skill/` directory — e.g. `cd skill && ../.venv/bin/python -m scripts.run --check`):
 
 ```bash
 python -m scripts.run --check                 # preflight: brand.json + per-platform env + live Telegram ping. Run this first.

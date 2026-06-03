@@ -92,7 +92,7 @@ Run from the OpenClaw server. Full step-by-step is in
 7. **Brand directory + ICP**
 
    ```bash
-   .venv/bin/python -m scripts.run --scaffold
+   cd skill && ../.venv/bin/python -m scripts.run --scaffold
    # edit ~/Syncthing/adloops-brand/brand.json — fill personas, value props, voice
    ```
 
@@ -121,7 +121,7 @@ Run from the OpenClaw server. Full step-by-step is in
    actual campaigns before they touch anything:
 
    ```cron
-   0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --no-mutate
+   0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run --no-mutate
    ```
 
    When you trust the proposer, flip to full mode by dropping

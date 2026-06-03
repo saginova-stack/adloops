@@ -66,7 +66,7 @@ Syncthing share name. Two options:
 - Or scaffold a placeholder locally to test:
 
 ```bash
-.venv/bin/python -m scripts.run --scaffold
+cd skill && ../.venv/bin/python -m scripts.run --scaffold
 ```
 
 This creates `assets/{logo,linkedin,screenshots}/`, `campaigns/.archive/`, and
@@ -193,7 +193,7 @@ curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" | jq '.resul
 Once you've wired credentials and dropped `brand.json` in place, run:
 
 ```bash
-.venv/bin/python -m scripts.run --check
+cd skill && ../.venv/bin/python -m scripts.run --check
 ```
 
 The preflight does four things, each one line of output:
@@ -213,7 +213,7 @@ Exit code is `0` if everything's green, `1` if anything's red. Wire this
 into a deploy gate if you like.
 
 Note: `--check` does NOT make live API calls to Google Ads / Meta /
-LinkedIn — for that, run `.venv/bin/python -m scripts.run --dry-run`,
+LinkedIn — for that, run `cd skill && ../.venv/bin/python -m scripts.run --dry-run`,
 which exercises every read client end-to-end without applying any
 mutations.
 
@@ -229,13 +229,13 @@ crontab -e
 Add (assuming server TZ matches user TZ — confirm with `date`):
 
 ```
-0 9 * * 2,5 cd /home/ubuntu/adloops && /home/ubuntu/adloops/.venv/bin/python -m scripts.run >> /home/ubuntu/.openclaw/logs/adloops.log 2>&1
+0 9 * * 2,5 cd /home/ubuntu/adloops/skill && /home/ubuntu/adloops/.venv/bin/python -m scripts.run >> /home/ubuntu/.openclaw/logs/adloops.log 2>&1
 ```
 
 If you use OC's cron skill instead, the equivalent shell command is:
 
 ```bash
-cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
+cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run
 ```
 
 ## 7. Operational

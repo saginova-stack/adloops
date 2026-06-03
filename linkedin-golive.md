@@ -55,7 +55,7 @@ Verify you're on the fork at the trimmed commit:
 cd skill/mcp-servers/linkedin-ads
 git remote -v                       # origin should be saginova-stack/...
 git rev-parse HEAD                  # should be 996b080...
-grep "SCOPES =" src/auth/oauth.js dist/auth/oauth.js 2>/dev/null
+grep "SCOPES =" src/auth/oauth.ts    # source is TypeScript; dist/ may not exist yet
 # if dist/ is stale or missing, rebuild:
 npm install --no-audit --no-fund && npm run build
 grep "SCOPES =" dist/auth/oauth.js  # MUST read: ['rw_ads', 'r_ads_reporting']
@@ -131,6 +131,9 @@ token store. Pull it out of the token file:
 ```bash
 export LINKEDIN_ACCESS_TOKEN=$(jq -r .access_token ~/.linkedin-ads-mcp/tokens.json)
 export LINKEDIN_AD_ACCOUNT_URN=urn:li:sponsoredAccount:XXXXXXXXXX   # your account
+# NB: LINKEDIN_AD_ACCOUNT_URN is required by BOTH the read path (campaign
+# filter) and the write executor (strips it to the numeric accountId) —
+# the executor raises if it's unset, even though it's set here under "reads".
 ```
 
 > ⚠️ **Known limitation — token staleness.** `LINKEDIN_ACCESS_TOKEN` is a
@@ -140,9 +143,14 @@ export LINKEDIN_AD_ACCOUNT_URN=urn:li:sponsoredAccount:XXXXXXXXXX   # your accou
 > Proper fix (future, not blocking): make the read client pull from the
 > refreshing token-store instead of an env var.
 
-Telegram destination (bot token is already set on the OC bot):
+Telegram destination. `TELEGRAM_BOT_TOKEN` is *supposed* to be set on the OC
+bot, but confirm it's actually exported in **this** shell first — if it isn't,
+`--check` fails loud with `telegram: TELEGRAM_BOT_TOKEN not set`:
 
 ```bash
+# Verify the bot token is present in this shell; export it if not:
+printenv TELEGRAM_BOT_TOKEN >/dev/null || export TELEGRAM_BOT_TOKEN=<bot_token>
+
 # Send any message to the bot in the target chat, then:
 curl "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getUpdates" \
   | jq '.result[-1].message.chat.id'
@@ -154,8 +162,8 @@ export ADLOOPS_TELEGRAM_CHAT_ID=<that_id>
 ## Step 4 — Brand config (skill refuses to run without it)
 
 ```bash
-cd /home/ubuntu/adloops
-.venv/bin/python -m scripts.run --scaffold
+cd /home/ubuntu/adloops/skill
+../.venv/bin/python -m scripts.run --scaffold
 # edit the brand.json it creates (default ~/Syncthing/adloops-brand/brand.json,
 # or set ADLOOPS_BRAND_DIR to an existing path) — fill icp.personas at minimum.
 ```
@@ -167,12 +175,14 @@ The run fails loud if `icp.personas` is empty — that's intentional.
 ## Step 5 — Preflight, then validate against real data
 
 ```bash
+cd /home/ubuntu/adloops/skill
+
 # Preflight: brand.json + per-platform env + live Telegram ping
-.venv/bin/python -m scripts.run --check
+../.venv/bin/python -m scripts.run --check
 
 # Validate end-to-end: live LinkedIn reads + previewed (not applied) writes.
 # This is the ONE thing the 198-test suite can't cover.
-.venv/bin/python -m scripts.run --dry-run
+../.venv/bin/python -m scripts.run --dry-run
 ```
 
 **Success criteria for the dry-run:**
@@ -185,6 +195,14 @@ The run fails loud if `icp.personas` is empty — that's intentional.
 If you see `unauthorized_scope_error` here, the submodule didn't move to
 the fork — go back to Step 0.
 
+> **What `--dry-run` does NOT prove.** For an AUTO LinkedIn proposal it
+> *spawns* the write MCP (so it catches a missing `node`/`dist/`), but it
+> short-circuits before calling `update_campaign` — so it never exercises
+> the write-side token store or OAuth refresh. A green dry-run does **not**
+> guarantee writes work; the first real (non-`--dry-run`) run is the first
+> true test of the write path. (`--dry-run` *does* write decision rows to
+> `.audit.jsonl`; `--no-mutate` does not — see Step 6.)
+
 ---
 
 ## Step 6 — Schedule observation-only
@@ -193,12 +211,18 @@ Once the dry-run looks right, schedule `--no-mutate` (audit + report +
 "would have fired" preview; touches nothing live):
 
 ```cron
-0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --no-mutate
+0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run --no-mutate
 ```
 
-Run that for ~2 weeks, read `.audit.jsonl` after each run, then drop
-`--no-mutate` to go live when you trust the proposer. (Same rollout the
-other platforms follow — see `nextsteps.md`.)
+Run that for ~2 weeks, then drop `--no-mutate` to go live when you trust
+the proposer. (Same rollout the other platforms follow — see `nextsteps.md`.)
+
+> **Where to read the verdicts under `--no-mutate`.** `--no-mutate` writes
+> **nothing** to `.audit.jsonl` — it only populates the "would have fired"
+> section of the rendered Telegram/stdout report. Read *that* after each run
+> to see the AUTO/APPROVAL/REJECTED decisions. (If you want a persisted
+> decision log during observation, use `--dry-run` instead, which both
+> previews and appends to `.audit.jsonl`.)
 
 ---
 

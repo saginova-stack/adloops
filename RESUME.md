@@ -42,7 +42,7 @@ Per-audit-run mutation pipeline:
 
 Every AUTO/APPROVAL/REJECTED decision writes one JSONL line to `.audit.jsonl`. The `--approve` CLI mode reads those rows and replays a single APPROVAL after re-running `check_mutation` against current brand config.
 
-CLI flags:
+CLI flags (run from `skill/` — e.g. `cd skill && ../.venv/bin/python -m scripts.run …`):
 - `python -m scripts.run` — full pipeline, sends to Telegram
 - `python -m scripts.run --check` — operator preflight: validates brand.json, instantiates each platform's read client, live-pings Telegram (getMe + getChat). Exits 0 if green.
 - `python -m scripts.run --dry-run` — no Telegram, executors run in preview mode (no real changes)
@@ -80,13 +80,13 @@ After the install + credentials, run for two weeks with `--no-mutate` to validat
 
 ```bash
 # Week 1-2: audit only, no mutations
-0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --no-mutate
+0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run --no-mutate
 
 # Or: preview mutations without applying
-0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run --dry-run
+0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run --dry-run
 
 # Week 3+: full pipeline
-0 9 * * 2,5  cd /home/ubuntu/adloops && .venv/bin/python -m scripts.run
+0 9 * * 2,5  cd /home/ubuntu/adloops/skill && ../.venv/bin/python -m scripts.run
 ```
 
 After every run in the first month, read `~/Syncthing/adloops-brand/campaigns/.audit.jsonl` and confirm the AUTO decisions look sane. If they don't, tune the thresholds in `mutations.py` (`PAUSE_ZOMBIE_MIN_SPEND`, `DECREASE_CPA_SPIKE_PCT`, `INCREASE_CPA_DROP_PCT`) or temporarily switch to `--no-mutate`.
