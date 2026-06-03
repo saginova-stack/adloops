@@ -277,7 +277,7 @@ fatigue-triggered direction is right, and the generation quality bar should be
 **"thumb-stop"** — scroll-stopping creative, not just on-brand filler. Folded
 into the spec as the bar for generated copy + images.
 
-## Phase 5 — cross-campaign / portfolio budget optimization (idea; not specced)
+## Phase 5 — cross-campaign / portfolio budget optimization (planned; see `phase5-portfolio-spec.md`)
 
 Proposed 2026-06-03 (Mike Silberberg, ex-Google). Beyond per-campaign tweaks:
 actively **reallocate budget across campaigns** — pull spend from
@@ -303,3 +303,5 @@ Why it's a bigger shift than Phase 2–3 (needs its own design pass):
 Open question: rule-based (shift N% from worst-CPA to best, within caps) vs a
 true optimizer. Start rule-based + guardrailed; revisit once there's observed
 data from the `--no-mutate` window.
+
+Full spec: `phase5-portfolio-spec.md`.
