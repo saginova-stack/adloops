@@ -259,6 +259,15 @@ Live-calls prerequisites are documented in `setup.md` §3.4 and `RESUME.md`.
 
 ---
 
-## Phase 4 — creative generation (out of scope; separate spec)
+## Phase 4 — creative generation (planned; see `phase4-creative-spec.md`)
 
-Not addressed by this repo. If/when added, it should land as a sibling skill (`adloops-creative`) that consumes the same `brand.json` rather than entangling with the audit cycle.
+Planned, not started. Direction set 2026-06-03: the audit flags creative
+fatigue → a new, isolated `creative/` module extracts the brand design system
+from `company.url`, generates on-brand ad **copy + images** via OpenAI
+(GPT-5-class copy, `gpt-image-1` images), and pushes them as **PAUSED drafts**
+through guardrails + the existing approval queue. Free and in-skill for now,
+built as a decouple-able module so it can move to a paid tier later.
+
+This intentionally revises the earlier note (which had it as an out-of-repo
+sibling skill kept *out* of the audit cycle): it now lives in this repo and is
+audit-coupled. Full spec: `phase4-creative-spec.md`.
