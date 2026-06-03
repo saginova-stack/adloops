@@ -41,7 +41,7 @@ adloops/
 ```bash
 ./install.sh                                  # installs uv, syncs submodules, builds, sets up .venv, runs tests
 cd skill                                       # run.py is a module under skill/ — invoke from here
-../.venv/bin/python -m scripts.run --scaffold # creates ~/Syncthing/adloops-brand
+../.venv/bin/python -m scripts.run --scaffold # creates ~/.adloops/brand (override: ADLOOPS_BRAND_DIR)
 # fill in brand.json + wire creds (see setup.md §3), then:
 ../.venv/bin/python -m scripts.run --dry-run  # audit + propose + show previews, no real changes, no Telegram
 ```

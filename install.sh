@@ -17,7 +17,7 @@
 #   - Run the OAuth wizards (`uv run adloop init`, `node dist/auth-cli.js`).
 #     Those need interactive input and credentials — operator runs them by
 #     hand. The install above prepares the trees so those commands work.
-#   - Touch `~/Syncthing/adloops-brand/`. Scaffold with `cd skill && ../.venv/bin/python -m scripts.run --scaffold`.
+#   - Touch the brand dir (default `~/.adloops/brand`, override `ADLOOPS_BRAND_DIR`). Scaffold with `cd skill && ../.venv/bin/python -m scripts.run --scaffold`.
 #   - Modify cron. See setup.md §5 for the cron entry.
 
 set -euo pipefail
@@ -105,7 +105,7 @@ Next steps (in order):
 
   2. Scaffold the brand directory and fill in ICP:
        cd skill && ../.venv/bin/python -m scripts.run --scaffold
-       # edit ~/Syncthing/adloops-brand/brand.json
+       # edit the brand.json it creates (default ~/.adloops/brand/brand.json)
 
   3. Dry-run end to end:
        cd skill && ../.venv/bin/python -m scripts.run --dry-run

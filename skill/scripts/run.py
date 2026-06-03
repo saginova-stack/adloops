@@ -332,7 +332,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # 1b) Preflight mode
     if args.check:
-        from . import preflight
+        if __package__ in (None, ""):
+            from scripts import preflight  # type: ignore
+        else:
+            from . import preflight
         return preflight.run()
 
     # 1c) Approve mode

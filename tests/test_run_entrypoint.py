@@ -74,6 +74,34 @@ def test_scaffold_exits_zero(tmp_path, monkeypatch, capsys):
     assert "Scaffolded" in out
 
 
+def test_check_works_script_style_subprocess(tmp_path):
+    """Regression: `python skill/scripts/run.py --check` must work when invoked
+    script-style (not `-m scripts.run`).
+
+    The lazy `preflight` import inside --check used to be relative-only
+    (`from . import preflight`) and crashed script-style runs with
+    "attempted relative import with no known parent package" — even though the
+    file's top-level imports already supported both styles. Downloaders running
+    the documented `skill/scripts/run.py` invocation hit this. This guards the
+    dual-mode import so the whole --check path works script-style.
+    """
+    import os
+    import subprocess
+    import sys
+
+    repo_root = Path(__file__).resolve().parents[1]
+    run_py = repo_root / "skill" / "scripts" / "run.py"
+    env = dict(os.environ, ADLOOPS_BRAND_DIR=str(tmp_path / "absent"))
+    result = subprocess.run(
+        [sys.executable, str(run_py), "--check"],
+        capture_output=True, text=True, env=env, cwd=str(repo_root),
+    )
+    combined = result.stdout + result.stderr
+    # The bug manifested as an ImportError before preflight ever ran.
+    assert "attempted relative import" not in combined
+    assert "AdLoops preflight" in combined  # preflight.run() was actually reached
+
+
 def test_brand_missing_returns_2_and_attempts_telegram_notice(tmp_path, monkeypatch):
     monkeypatch.setenv("ADLOOPS_BRAND_DIR", str(tmp_path / "nope"))
     sent: list[str] = []

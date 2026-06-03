@@ -58,11 +58,13 @@ Those four steps are below.
 
 ## 2. Brand directory
 
-The skill expects the brand directory at `~/Syncthing/adloops-brand/`. **It does
-not exist on this server yet** — the user (Michiel) needs to confirm the actual
-Syncthing share name. Two options:
+The brand directory defaults to `~/.adloops/brand/`. Override it with
+`ADLOOPS_BRAND_DIR` to keep the config elsewhere (e.g. a synced folder). On the
+OC server we keep it in Syncthing and point the default at it via a symlink
+(`~/.adloops/brand -> ~/Syncthing/adloops-brand`); `ADLOOPS_BRAND_DIR` works too.
+Two options:
 
-- If Syncthing is mounted, override with `ADLOOPS_BRAND_DIR=/path/to/share/adloops-brand`.
+- Point at an existing share: `export ADLOOPS_BRAND_DIR=/path/to/share/adloops-brand`.
 - Or scaffold a placeholder locally to test:
 
 ```bash

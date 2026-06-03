@@ -1,8 +1,9 @@
 """Resolved on-disk paths for the brand directory and skill resources.
 
-The brand directory lives in Syncthing so it stays in sync between Michiel's
-laptop and the OpenClaw server. We resolve it lazily and let callers fail loud
-if it's missing — see brand_loader.load_or_raise().
+The brand directory defaults to ``~/.adloops/brand`` and is overridable with
+the ``ADLOOPS_BRAND_DIR`` env var (e.g. point it at a synced folder to share the
+config across machines). We resolve it lazily and let callers fail loud if it's
+missing — see brand_loader.load_or_raise().
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-DEFAULT_BRAND_DIR = Path.home() / "Syncthing" / "adloops-brand"
+DEFAULT_BRAND_DIR = Path.home() / ".adloops" / "brand"
 
 
 def brand_dir() -> Path:

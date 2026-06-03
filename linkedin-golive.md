@@ -164,7 +164,7 @@ export ADLOOPS_TELEGRAM_CHAT_ID=<that_id>
 ```bash
 cd /home/ubuntu/adloops/skill
 ../.venv/bin/python -m scripts.run --scaffold
-# edit the brand.json it creates (default ~/Syncthing/adloops-brand/brand.json,
+# edit the brand.json it creates (default ~/.adloops/brand/brand.json,
 # or set ADLOOPS_BRAND_DIR to an existing path) — fill icp.personas at minimum.
 ```
 

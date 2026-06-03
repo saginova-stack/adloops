@@ -44,10 +44,22 @@ Before running:
 
 1. **Run `./install.sh`** at the repo root once. Installs uv, syncs the adloop MCP, builds the LinkedIn MCP, sets up the Python venv.
 2. **Wire credentials** for at least one platform (see `setup.md` for the application steps).
-3. **Fill in `~/Syncthing/adloops-brand/brand.json`.** The skill refuses to run if `icp.personas` is empty. Run `python -m scripts.run --scaffold` to create the directory + a copy of the example file.
+3. **Fill in the brand config** (`brand.json`). The skill refuses to run if `icp.personas` is empty. Run `cd skill && ../.venv/bin/python -m scripts.run --scaffold` to create the directory + a copy of the example file. Default location is `~/.adloops/brand/brand.json`; override with `ADLOOPS_BRAND_DIR`.
 4. **Confirm the OC Telegram bot is reachable** — the skill reads `TELEGRAM_BOT_TOKEN` from the OpenClaw process env. Set `ADLOOPS_TELEGRAM_CHAT_ID` to the chat that should receive the report.
 
 ## Run it
+
+Run from the `skill/` directory, using a Python that has `requirements.txt`
+installed. From the repo that's the venv `install.sh` created:
+
+```bash
+cd skill && ../.venv/bin/python -m scripts.run --check
+```
+
+(If you installed this as a standalone skill rather than from the repo, run from
+the skill directory with that environment's Python, e.g.
+`./.venv/bin/python -m scripts.run --check`.) The commands below are shown as
+`python -m scripts.run` for brevity — substitute the Python above.
 
 ```bash
 # One-time scaffold of the brand directory:
@@ -74,7 +86,7 @@ The cron operator should run this from inside `skill/` with the venv activated. 
 2. For each enabled platform in `brand.json.guardrails.platforms`:
    - Pull the last 7 days of campaign-level performance.
    - Skip the platform with a clear error if its env vars are missing — other platforms still run.
-3. Diff against the most recent snapshot in `~/Syncthing/adloops-brand/campaigns/.archive/`.
+3. Diff against the most recent snapshot in `<brand-dir>/campaigns/.archive/` (default `~/.adloops/brand`, or `ADLOOPS_BRAND_DIR`).
 4. Compute top movers: 3 best by conversion lift, 3 worst by spend-with-zero-conversions.
 5. Propose mutations via `scripts/mutations.py` (pause zombies, ±20% on CPA spikes/drops). Each runs through `scripts/guardrails.py`: AUTO → dispatched via `scripts/executors/` (Google goes through the adloop MCP's `preview → confirm_and_apply`; Meta goes direct to Marketing Graph). APPROVAL → queued to the report. REJECTED → audit log only.
 6. Upgrade recommendations to the LLM chain (`recommender.py`): OpenRouter Nemotron → Anthropic Haiku → rule-based fallback.
@@ -101,7 +113,7 @@ Implemented in `scripts/guardrails.py`, fully unit-tested, wired in front of eve
 | Increase that pushes total daily spend over `neverIncreaseBudgetAbove` | REJECTED |
 | Unrecognized mutation kind | REJECTED |
 
-Every mutation — proposed, applied, or rejected — writes one JSONL line to `~/Syncthing/adloops-brand/campaigns/.audit.jsonl`.
+Every mutation — proposed, applied, or rejected — writes one JSONL line to `<brand-dir>/campaigns/.audit.jsonl` (default `~/.adloops/brand`, or `ADLOOPS_BRAND_DIR`).
 
 ## Vendored MCP servers
 
