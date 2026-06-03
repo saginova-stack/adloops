@@ -271,3 +271,35 @@ built as a decouple-able module so it can move to a paid tier later.
 This intentionally revises the earlier note (which had it as an out-of-repo
 sibling skill kept *out* of the audit cycle): it now lives in this repo and is
 audit-coupled. Full spec: `phase4-creative-spec.md`.
+
+External validation (Mike Silberberg, ex-Google, 2026-06-03): the
+fatigue-triggered direction is right, and the generation quality bar should be
+**"thumb-stop"** — scroll-stopping creative, not just on-brand filler. Folded
+into the spec as the bar for generated copy + images.
+
+## Phase 5 — cross-campaign / portfolio budget optimization (idea; not specced)
+
+Proposed 2026-06-03 (Mike Silberberg, ex-Google). Beyond per-campaign tweaks:
+actively **reallocate budget across campaigns** — pull spend from
+underperformers and feed proven winners as a coordinated move, optimizing the
+account as a portfolio rather than campaign-by-campaign. Genuinely new; not
+covered by Phases 1–4.
+
+Why it's a bigger shift than Phase 2–3 (needs its own design pass):
+
+- **New action type.** Today the proposer emits independent per-campaign budget
+  changes. Reallocation is a *paired* move (−X on A, +X on B) reasoned about
+  together, ideally spend-neutral within the account.
+- **Comparison basis.** Needs a fair cross-campaign metric (efficiency /
+  marginal CPA / ROAS) that accounts for differing objectives and campaign
+  maturity — not raw CPA.
+- **Guardrail interaction.** Layers on the existing per-run ±% cap and
+  cross-platform spend ceiling; reallocation must respect both and stay within
+  the account total. Higher risk than a single tweak → **APPROVAL-gated**, not
+  AUTO, at least initially.
+- **Scope.** Within a single platform first; cross-platform reallocation later
+  (it raises attribution-comparability questions).
+
+Open question: rule-based (shift N% from worst-CPA to best, within caps) vs a
+true optimizer. Start rule-based + guardrailed; revisit once there's observed
+data from the `--no-mutate` window.

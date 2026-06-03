@@ -78,6 +78,13 @@ dir to a private package — no audit refactor required.
 Shipping **4a→4c** alone already delivers value (on-brand copy suggestions in
 Telegram) without any new platform-write surface.
 
+**Quality bar for 4c/4d — "thumb-stop"** (Mike Silberberg, ex-Google,
+2026-06-03): generated copy + images must be *scroll-stopping*, not just
+on-brand filler. On-brand is the floor (design-system + brandVoice compliance);
+the goal is creative a target persona actually stops for. Bake this into the
+generation prompts and into how proposals are judged before they're surfaced —
+prefer a small number of strong, distinct concepts over many safe variants.
+
 ---
 
 ## 4. Data model additions
