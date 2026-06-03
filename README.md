@@ -4,6 +4,10 @@ Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Met
 
 > Phase 1 (read-only audit + GA4 cross-reference), Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations), and Phase 3 (LinkedIn mutation executor) shipped. LinkedIn mutations still need Marketing Developer Platform approval before they can run against live accounts — the code is in place and tested against MCP mocks.
 
+**New to AdLoops?** Start with [`ONBOARDING.md`](./ONBOARDING.md) — a guided
+zero-to-first-report path with every onboarding gotcha inlined (Manager-account
+dev token, headless OAuth, the conversion-tracking prerequisite, run order).
+
 ## Layout
 
 ```

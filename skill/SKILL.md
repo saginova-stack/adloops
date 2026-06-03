@@ -42,6 +42,10 @@ Phase 2 (current) wires guardrailed mutations on Google Ads and Meta. LinkedIn s
 
 Before running:
 
+> First-time setup? The full guided path (Manager-account dev token, headless
+> OAuth, conversion-tracking prerequisite, run order) is in ONBOARDING.md:
+> <https://github.com/saginova-stack/adloops/blob/main/ONBOARDING.md>
+
 1. **Run `./install.sh`** at the repo root once. Installs uv, syncs the adloop MCP, builds the LinkedIn MCP, sets up the Python venv.
 2. **Wire credentials** for at least one platform (see `setup.md` for the application steps).
 3. **Fill in the brand config** (`brand.json`). The skill refuses to run if `icp.personas` is empty. Run `cd skill && ../.venv/bin/python -m scripts.run --scaffold` to create the directory + a copy of the example file. Default location is `~/.adloops/brand/brand.json`; override with `ADLOOPS_BRAND_DIR`.
