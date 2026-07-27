@@ -242,3 +242,50 @@ def test_desired_campaign_bad_special_ad_categories_rejected(tmp_path: Path):
     ))
     with pytest.raises(BrandConfigError, match="specialAdCategories must be an array"):
         load_or_raise(p)
+
+
+def test_desired_campaign_invalid_objective_rejected(tmp_path: Path):
+    """A typo'd objective should fail loud at load, not at Meta dispatch."""
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({"platform": "meta", "name": "x", "objective": "GET_LEADS"}))
+    with pytest.raises(BrandConfigError, match="not a valid Meta objective"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_ad_set_parsed_and_normalized(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({
+        "platform": "meta", "name": "Q3 Leads", "objective": "OUTCOME_LEADS",
+        "adSet": {
+            "name": "US", "optimizationGoal": "LEAD_GENERATION", "billingEvent": "IMPRESSIONS",
+            "targeting": {"geo_locations": {"countries": ["US"]}}, "dailyBudget": 25,
+            "promotedObject": {"page_id": "123"},
+        },
+    }))
+    spec = load_or_raise(p).desired_campaigns[0]
+    assert spec.ad_set["optimization_goal"] == "LEAD_GENERATION"
+    assert spec.ad_set["billing_event"] == "IMPRESSIONS"
+    assert spec.ad_set["daily_budget"] == 25.0
+    assert spec.ad_set["promoted_object"] == {"page_id": "123"}
+
+
+def test_desired_campaign_ad_set_missing_billing_event_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({
+        "platform": "meta", "name": "x", "objective": "OUTCOME_LEADS",
+        "adSet": {"name": "US", "optimizationGoal": "LEAD_GENERATION",
+                  "targeting": {"geo_locations": {"countries": ["US"]}}},
+    }))
+    with pytest.raises(BrandConfigError, match="billingEvent is required"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_ad_set_requires_targeting(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({
+        "platform": "meta", "name": "x", "objective": "OUTCOME_LEADS",
+        "adSet": {"name": "US", "optimizationGoal": "LEAD_GENERATION",
+                  "billingEvent": "IMPRESSIONS", "targeting": {}},
+    }))
+    with pytest.raises(BrandConfigError, match="targeting is required"):
+        load_or_raise(p)

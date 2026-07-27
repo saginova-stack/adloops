@@ -303,6 +303,62 @@ def test_meta_create_campaign_requires_name_and_objective(monkeypatch):
         meta.dispatch(m, dry_run=False)
 
 
+def _adset_cfg(**kw):
+    base = {"name": "US", "optimization_goal": "LEAD_GENERATION",
+            "billing_event": "IMPRESSIONS",
+            "targeting": {"geo_locations": {"countries": ["US"]}}}
+    base.update(kw)
+    return base
+
+
+def test_meta_create_campaign_scaffolds_ad_set_under_returned_id(monkeypatch):
+    """The ad set needs the campaign id, which only exists after the create
+    returns — so it must be one chained dispatch, and the ad set must carry
+    the new id, not a placeholder."""
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    sent = []
+
+    def fake_http(method, path, body, token):
+        sent.append((method, path, body))
+        return {"id": "C99"} if path.endswith("/campaigns") else {"id": "AS1"}
+
+    monkeypatch.setattr(meta, "_http", fake_http)
+
+    m = Mutation(platform="meta", campaign_id="", campaign_name="Q3",
+                 kind="create_campaign",
+                 after={"name": "Q3", "objective": "OUTCOME_LEADS", "status": "PAUSED",
+                        "ad_set": _adset_cfg(daily_budget=25.0)})
+    result = meta.dispatch(m, dry_run=False)
+
+    assert [s[1] for s in sent] == ["/act_42/campaigns", "/act_42/adsets"]
+    adset_body = sent[1][2]
+    assert adset_body["campaign_id"] == "C99"     # the returned id, not a placeholder
+    assert adset_body["status"] == "PAUSED"
+    assert adset_body["optimization_goal"] == "LEAD_GENERATION"
+    assert adset_body["daily_budget"] == "2500"   # cents
+    assert json.loads(adset_body["targeting"]) == {"geo_locations": {"countries": ["US"]}}
+    assert result == {"campaign": {"id": "C99"}, "ad_set": {"id": "AS1"}}
+
+
+def test_meta_create_campaign_with_ad_set_dry_run_posts_nothing(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    posted = []
+    monkeypatch.setattr(meta, "_http", lambda *a, **k: posted.append(a))
+
+    m = Mutation(platform="meta", campaign_id="", campaign_name="Q3",
+                 kind="create_campaign",
+                 after={"name": "Q3", "objective": "OUTCOME_LEADS", "status": "PAUSED",
+                        "ad_set": _adset_cfg()})
+    result = meta.dispatch(m, dry_run=True)
+    assert posted == []
+    assert result["dry_run"] is True
+    assert result["path"] == "/act_42/campaigns"
+    assert result["ad_set"]["path"] == "/act_42/adsets"
+    assert result["ad_set"]["body"]["campaign_id"] == "<new-campaign-id>"
+
+
 def test_meta_dry_run_returns_planned_request_without_calling_http(monkeypatch):
     monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
     called = []

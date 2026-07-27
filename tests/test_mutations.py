@@ -375,6 +375,74 @@ def test_pause_ranks_above_create_under_a_tight_cap():
     assert ms[0].kind == "pause"
 
 
+# ---- create_campaign: ad-set scaffolding + budget drift -------------------
+
+def test_create_carries_ad_set_into_mutation():
+    r = meta_report(existing_names=["something else"])
+    ms = propose(r, brand_with(proposer={"desiredCampaigns": [_desired(adSet={
+        "name": "US Prospecting", "optimizationGoal": "LEAD_GENERATION",
+        "billingEvent": "IMPRESSIONS", "targeting": {"geo_locations": {"countries": ["US"]}},
+    })]}))
+    assert len(ms) == 1
+    ad_set = ms[0].after["ad_set"]
+    # brand_loader normalizes camelCase → snake for the executor.
+    assert ad_set["optimization_goal"] == "LEAD_GENERATION"
+    assert ad_set["billing_event"] == "IMPRESSIONS"
+    assert ad_set["targeting"] == {"geo_locations": {"countries": ["US"]}}
+
+
+def test_drift_steps_live_budget_toward_declared_target_within_cap():
+    """Declared $100, live $50: a one-shot jump would be +100% and queue for
+    approval. Instead step +20% (the cap) to $60 so it stays AUTO and converges."""
+    r = meta_report(
+        campaigns=[cp(platform="meta", campaign_id="C1", campaign_name="Q3 Leads",
+                      daily_budget=50.0)],
+        existing_names=["Q3 Leads"],
+    )
+    ms = propose(r, brand_with(pct=20, proposer={"desiredCampaigns": [_desired(dailyBudget=100)]}))
+    assert len(ms) == 1
+    assert ms[0].kind == "budget_change"
+    assert ms[0].campaign_id == "C1"
+    assert ms[0].before == {"daily_budget": 50.0}
+    assert ms[0].after == {"daily_budget": 60.0}
+
+
+def test_drift_reaches_target_when_within_cap():
+    r = meta_report(
+        campaigns=[cp(platform="meta", campaign_id="C1", campaign_name="Q3 Leads",
+                      daily_budget=95.0)],
+        existing_names=["Q3 Leads"],
+    )
+    ms = propose(r, brand_with(pct=20, proposer={"desiredCampaigns": [_desired(dailyBudget=100)]}))
+    assert ms[0].after == {"daily_budget": 100.0}  # min(target, 95*1.2) = 100, no overshoot
+
+
+def test_no_drift_when_live_matches_declared():
+    r = meta_report(
+        campaigns=[cp(platform="meta", campaign_id="C1", campaign_name="Q3 Leads",
+                      daily_budget=100.0)],
+        existing_names=["Q3 Leads"],
+    )
+    assert propose(r, brand_with(proposer={"desiredCampaigns": [_desired(dailyBudget=100)]})) == []
+
+
+def test_no_drift_when_no_declared_budget():
+    r = meta_report(
+        campaigns=[cp(platform="meta", campaign_id="C1", campaign_name="Q3 Leads",
+                      daily_budget=50.0)],
+        existing_names=["Q3 Leads"],
+    )
+    # Spec declares no dailyBudget → nothing to reconcile against.
+    assert propose(r, brand_with(proposer={"desiredCampaigns": [_desired()]})) == []
+
+
+def test_no_drift_when_declared_campaign_has_no_delivery():
+    """Exists in the name inventory but not in the spend-filtered perf rows → we
+    can't see its budget, so we leave it alone rather than guess."""
+    r = meta_report(campaigns=[], existing_names=["Q3 Leads"])
+    assert propose(r, brand_with(proposer={"desiredCampaigns": [_desired(dailyBudget=100)]})) == []
+
+
 # ---- projected_total_spend -----------------------------------------------
 
 def test_projected_total_sums_active_with_overrides():

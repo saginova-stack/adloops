@@ -147,6 +147,15 @@ def _action_detail(mut: dict) -> str:
         return f"daily_budget {_fmt_money(b) if b is not None else '—'} → {_fmt_money(a) if a is not None else '—'}"
     if kind in ("pause", "enable"):
         return f"{before.get('status', '?')} → {after.get('status', '?')}"
+    if kind == "create_campaign":
+        obj = after.get("objective", "?")
+        budget = after.get("daily_budget")
+        budget_str = f" · {_fmt_money(budget)}/day" if budget is not None else ""
+        if after.get("ad_set"):
+            tail = "with a default ad set · launches PAUSED — review & enable to go live"
+        else:
+            tail = "launches PAUSED — add ad sets & enable to go live"
+        return f"{obj}{budget_str} · {tail}"
     return ""
 
 

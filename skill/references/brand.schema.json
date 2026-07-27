@@ -102,12 +102,19 @@
                   "platform": { "const": "meta" },
                   "name": { "type": "string", "minLength": 1 },
                   "objective": {
-                    "description": "Meta campaign objective, e.g. OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_TRAFFIC.",
+                    "description": "Meta ODAX campaign objective.",
                     "type": "string",
-                    "minLength": 1
+                    "enum": [
+                      "OUTCOME_AWARENESS",
+                      "OUTCOME_TRAFFIC",
+                      "OUTCOME_ENGAGEMENT",
+                      "OUTCOME_LEADS",
+                      "OUTCOME_APP_PROMOTION",
+                      "OUTCOME_SALES"
+                    ]
                   },
                   "dailyBudget": {
-                    "description": "Optional campaign-level daily budget in account-currency major units (Campaign Budget Optimization). Omit to set budgets on ad sets later.",
+                    "description": "Optional campaign-level daily budget in account-currency major units (Campaign Budget Optimization). Omit to set budgets on ad sets later. If the campaign already exists, each run steps its live budget toward this value within the per-run cap.",
                     "type": "number",
                     "exclusiveMinimum": 0
                   },
@@ -115,6 +122,41 @@
                     "description": "Meta special ad categories (e.g. EMPLOYMENT, HOUSING, CREDIT, FINANCIAL_PRODUCTS_SERVICES). Defaults to none.",
                     "type": "array",
                     "items": { "type": "string" }
+                  },
+                  "adSet": {
+                    "description": "Optional default ad set created under the new campaign so it launches populated rather than empty. Also launches PAUSED.",
+                    "type": "object",
+                    "required": ["name", "optimizationGoal", "billingEvent", "targeting"],
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": { "type": "string", "minLength": 1 },
+                      "optimizationGoal": {
+                        "description": "Meta ad-set optimization goal, e.g. LEAD_GENERATION, OFFSITE_CONVERSIONS, LINK_CLICKS, REACH.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "billingEvent": {
+                        "description": "Meta billing event, e.g. IMPRESSIONS, LINK_CLICKS.",
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "targeting": {
+                        "description": "Meta targeting spec, e.g. {\"geo_locations\": {\"countries\": [\"US\"]}}.",
+                        "type": "object",
+                        "minProperties": 1
+                      },
+                      "dailyBudget": {
+                        "description": "Ad-set daily budget in account-currency major units (non-CBO campaigns). Omit when the campaign carries a CBO budget.",
+                        "type": "number",
+                        "exclusiveMinimum": 0
+                      },
+                      "bidStrategy": { "type": "string" },
+                      "bidAmount": { "type": "number", "exclusiveMinimum": 0 },
+                      "promotedObject": {
+                        "description": "e.g. {\"pixel_id\": \"...\", \"custom_event_type\": \"LEAD\"} or {\"page_id\": \"...\"}. Required by Meta for some optimization goals.",
+                        "type": "object"
+                      }
+                    }
                   }
                 }
               }

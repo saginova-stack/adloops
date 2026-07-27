@@ -71,6 +71,8 @@ def dispatch(mutation: Mutation, *, dry_run: bool = False) -> dict[str, Any]:
 
     if mutation.kind == "budget_change":
         return _dispatch_budget_change(mutation, token, dry_run=dry_run)
+    if mutation.kind == "create_campaign":
+        return _dispatch_create_campaign(mutation, token, dry_run=dry_run)
 
     method, path, body = _to_http(mutation)
     if dry_run:
@@ -85,7 +87,7 @@ def dispatch(mutation: Mutation, *, dry_run: bool = False) -> dict[str, Any]:
 
 
 def _to_http(m: Mutation) -> tuple[str, str, dict[str, Any]]:
-    """Build the single request for a non-budget mutation.
+    """Build the single request for a pause/enable mutation.
 
     Pause/enable act on the campaign object — Meta cascades campaign status
     to every child ad set, so this is correct for CBO and non-CBO alike.
@@ -94,18 +96,83 @@ def _to_http(m: Mutation) -> tuple[str, str, dict[str, Any]]:
         return "POST", f"/{m.campaign_id}", {"status": "PAUSED"}
     if m.kind == "enable":
         return "POST", f"/{m.campaign_id}", {"status": "ACTIVE"}
-    if m.kind == "create_campaign":
-        return _create_campaign_request(m)
     raise ExecutorError(f"Unsupported mutation kind for Meta: {m.kind!r}")
 
 
-def _create_campaign_request(m: Mutation) -> tuple[str, str, dict[str, Any]]:
+def _account_id() -> str:
     account = os.environ.get("META_AD_ACCOUNT_ID")
     if not account:
         raise ExecutorError(
             "create_campaign needs META_AD_ACCOUNT_ID (the act_* form) to know "
-            "which ad account to create the campaign under."
+            "which ad account to create under."
         )
+    return account
+
+
+def _dispatch_create_campaign(m: Mutation, token: str, *, dry_run: bool) -> dict[str, Any]:
+    """Create the campaign, then (if declared) scaffold a default ad set under it.
+
+    The ad set needs the campaign id, which only exists after the create
+    returns, so this can't be two independent mutations — it's one chained
+    dispatch. Both objects launch PAUSED.
+    """
+    method, path, body = _create_campaign_request(m)
+    ad_set_cfg = m.after.get("ad_set")
+    if dry_run:
+        plan: dict[str, Any] = {
+            "dry_run": True, "method": method, "path": path, "body": body,
+            "campaign_id": "",
+        }
+        if ad_set_cfg:
+            plan["ad_set"] = {
+                "method": "POST",
+                "path": f"/{_account_id()}/adsets",
+                "body": _ad_set_body(ad_set_cfg, campaign_id="<new-campaign-id>"),
+            }
+        return plan
+    campaign = _http(method, path, body, token)
+    if not ad_set_cfg:
+        return campaign
+    new_id = campaign.get("id")
+    if not new_id:
+        raise ExecutorError(
+            f"Campaign created but the Graph API returned no id ({campaign!r}); "
+            "cannot scaffold the ad set."
+        )
+    ad_set = _http(
+        "POST", f"/{_account_id()}/adsets",
+        _ad_set_body(ad_set_cfg, campaign_id=str(new_id)), token,
+    )
+    return {"campaign": campaign, "ad_set": ad_set}
+
+
+def _ad_set_body(cfg: dict[str, Any], *, campaign_id: str) -> dict[str, Any]:
+    """Build the /adsets POST body from a normalized (snake_case) ad-set spec.
+
+    Forces status=PAUSED and injects the parent campaign id. Budgets convert to
+    minor units; targeting/promoted_object are JSON-encoded as the Graph API
+    expects."""
+    body: dict[str, Any] = {
+        "name": cfg["name"],
+        "campaign_id": campaign_id,
+        "optimization_goal": cfg["optimization_goal"],
+        "billing_event": cfg["billing_event"],
+        "status": "PAUSED",
+        "targeting": json.dumps(cfg["targeting"]),
+    }
+    if cfg.get("daily_budget") is not None:
+        body["daily_budget"] = str(_to_cents(cfg["daily_budget"]))
+    if cfg.get("bid_strategy"):
+        body["bid_strategy"] = cfg["bid_strategy"]
+    if cfg.get("bid_amount") is not None:
+        body["bid_amount"] = str(_to_cents(cfg["bid_amount"]))
+    if cfg.get("promoted_object"):
+        body["promoted_object"] = json.dumps(cfg["promoted_object"])
+    return body
+
+
+def _create_campaign_request(m: Mutation) -> tuple[str, str, dict[str, Any]]:
+    account = _account_id()
     name = m.after.get("name")
     objective = m.after.get("objective")
     if not name or not objective:
