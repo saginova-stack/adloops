@@ -100,9 +100,9 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
             if not _accept(m):
                 return out
     # Desired-state reconciliation runs last: protecting existing spend
-    # (pauses, cuts) outranks spinning up new PAUSED campaigns when the
-    # per-run cap is tight.
-    for m in _propose_missing_campaigns(report, brand):
+    # (pauses, cuts) outranks spinning up new PAUSED campaigns and nudging
+    # declared budgets when the per-run cap is tight.
+    for m in _propose_desired_campaigns(report, brand):
         if not _accept(m):
             return out
     return out
@@ -212,53 +212,113 @@ def _propose_increase_on_cpa_drop(
 
 # ---- desired-state reconciliation ------------------------------------------
 
-def _propose_missing_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mutation]:
-    """Propose create_campaign for every declared campaign not already present.
+def _propose_desired_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mutation]:
+    """Reconcile `brand.desired_campaigns` against the account.
 
-    Deterministic reconciliation of `brand.desired_campaigns` against the
-    account's live campaign-name inventory (`PlatformResult.existing_campaign_names`).
+    Two deterministic behaviours per declared campaign:
+      - **Missing** → propose create_campaign (forced PAUSED), carrying the
+        optional ad-set spec so the executor scaffolds a populated launch.
+      - **Present, budget drifted** → if the spec declares a dailyBudget and the
+        live daily budget differs, propose a budget_change that steps toward the
+        target *within the per-run cap*, so it stays AUTO and converges over runs
+        rather than making one large jump that would queue for approval.
+
     Safety invariants:
-      - Every proposal is forced to status=PAUSED — the operator cannot declare
-        a campaign that launches live. Guardrails enforce this again downstream.
+      - Creates are always status=PAUSED; guardrails enforce it again downstream.
       - A platform whose inventory is unknown (fetch failed → names is None) is
         skipped entirely, so a transient read error never spawns a duplicate.
+      - Drift only fires when exactly one live campaign matches the declared name
+        (unambiguous) and its budget is visible — a declared campaign with no
+        delivery this window is left alone rather than guessed at.
       - Name match is case-insensitive on the trimmed name.
     """
     desired = brand.desired_campaigns
     if not desired:
         return
+    cap_pct = brand.max_daily_budget_change_pct
     names_by_platform: dict[str, set[str]] = {}
+    perf_by_name: dict[tuple[str, str], list[CampaignPerf]] = {}
     for pr in report.platforms:
         if pr.existing_campaign_names is not None:
             names_by_platform[pr.platform] = {
                 n.strip().casefold() for n in pr.existing_campaign_names
             }
+        for c in pr.campaigns:
+            perf_by_name.setdefault(
+                (c.platform, c.campaign_name.strip().casefold()), []
+            ).append(c)
+
     for spec in desired:
         existing = names_by_platform.get(spec.platform)
         if existing is None:
-            continue  # inventory unavailable → never risk a duplicate
-        if spec.name.strip().casefold() in existing:
-            continue  # already present
-        after: dict[str, Any] = {
-            "name": spec.name,
-            "objective": spec.objective,
-            "status": "PAUSED",
-            "special_ad_categories": list(spec.special_ad_categories),
-        }
-        if spec.daily_budget is not None:
-            after["daily_budget"] = spec.daily_budget
+            continue  # inventory unavailable → never risk a duplicate or bad drift
+        key = spec.name.strip().casefold()
+        if key not in existing:
+            yield _make_create_campaign(spec)
+            continue
+        # Already present → maybe reconcile budget drift toward the declared target.
+        if spec.daily_budget is None:
+            continue
+        matches = perf_by_name.get((spec.platform, key), [])
+        if len(matches) != 1:
+            continue  # no delivery data, or ambiguous same-name campaigns
+        c = matches[0]
+        if c.daily_budget is None or c.daily_budget <= 0:
+            continue
+        new_budget = _capped_step_toward(c.daily_budget, spec.daily_budget, cap_pct)
+        if new_budget is None or round(new_budget, 2) == round(c.daily_budget, 2):
+            continue
+        direction = "up" if new_budget > c.daily_budget else "down"
         yield Mutation(
             platform=spec.platform,
-            campaign_id="",  # Meta assigns the id when the campaign is created
-            campaign_name=spec.name,
-            kind="create_campaign",
-            before={},
-            after=after,
+            campaign_id=c.campaign_id,
+            campaign_name=c.campaign_name,
+            kind="budget_change",
+            before={"daily_budget": c.daily_budget},
+            after={"daily_budget": new_budget},
             reason=(
-                f"Declared in brand.json but not found in the {spec.platform} "
-                "account; creating it PAUSED for you to populate and launch."
+                f"Declared daily budget ${spec.daily_budget:.0f} in brand.json; "
+                f"live is ${c.daily_budget:.0f}. Stepping {direction} toward the "
+                f"target within the {cap_pct:.0f}% cap."
             ),
         )
+
+
+def _make_create_campaign(spec) -> Mutation:
+    after: dict[str, Any] = {
+        "name": spec.name,
+        "objective": spec.objective,
+        "status": "PAUSED",
+        "special_ad_categories": list(spec.special_ad_categories),
+    }
+    if spec.daily_budget is not None:
+        after["daily_budget"] = spec.daily_budget
+    if spec.ad_set is not None:
+        after["ad_set"] = spec.ad_set
+    return Mutation(
+        platform=spec.platform,
+        campaign_id="",  # Meta assigns the id when the campaign is created
+        campaign_name=spec.name,
+        kind="create_campaign",
+        before={},
+        after=after,
+        reason=(
+            f"Declared in brand.json but not found in the {spec.platform} "
+            "account; creating it PAUSED for you to populate and launch."
+        ),
+    )
+
+
+def _capped_step_toward(current: float, target: float, cap_pct: float) -> float | None:
+    """Step `current` toward `target` by at most `cap_pct` percent, without
+    overshooting. Returns None when current is non-positive (can't scale).
+    Keeps drift corrections inside the AUTO cap so they converge over runs."""
+    if current <= 0:
+        return None
+    step = current * (cap_pct / 100.0)
+    if target > current:
+        return round(min(target, current + step), 2)
+    return round(max(target, current - step), 2)
 
 
 # ---- helpers ---------------------------------------------------------------

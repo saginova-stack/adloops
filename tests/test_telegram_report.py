@@ -644,3 +644,40 @@ def test_pending_approvals_section_includes_approve_command():
     # The instruction should include the actual --approve command shape
     assert "--approve" in out
     assert f"{r.run_id}:0" in out
+
+
+# ---- create_campaign rendering (reconciler call-to-action) ----------------
+
+def _create_action(after, *, applied=True):
+    return {
+        "decision": "auto", "rule": "new_campaign_paused_ok", "explanation": "",
+        "mutation": {"platform": "meta", "campaign_id": "", "campaign_name": after["name"],
+                     "kind": "create_campaign", "before": {}, "after": after, "reason": ""},
+        "applied": applied,
+    }
+
+
+def test_create_campaign_action_shows_objective_budget_and_launch_nudge():
+    """A bare 'create_campaign (applied)' would leave the operator unaware they
+    have a PAUSED shell to populate. The line must carry the objective, budget,
+    and an explicit go-live nudge."""
+    after = {"name": "Q3 Leads", "objective": "OUTCOME_LEADS",
+             "status": "PAUSED", "daily_budget": 25.0}
+    r = make_report(actions_taken=[_create_action(after)])
+    body = "\n".join(render_report(r))
+    assert "Q3 Leads: create_campaign" in body
+    assert "OUTCOME_LEADS" in body
+    assert "$25.00/day" in body
+    assert "launches PAUSED" in body
+    assert "add ad sets & enable to go live" in body
+
+
+def test_create_campaign_action_notes_scaffolded_ad_set():
+    after = {"name": "Q3 Leads", "objective": "OUTCOME_LEADS", "status": "PAUSED",
+             "daily_budget": 25.0, "ad_set": {"name": "US", "optimization_goal": "LEAD_GENERATION",
+                                              "billing_event": "IMPRESSIONS",
+                                              "targeting": {"geo_locations": {"countries": ["US"]}}}}
+    r = make_report(actions_taken=[_create_action(after)])
+    body = "\n".join(render_report(r))
+    assert "with a default ad set" in body
+    assert "review & enable to go live" in body

@@ -42,17 +42,56 @@ class ProposerThresholds:
     max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
 
 
+# Meta ODAX outcome objectives. Validated at load time so a typo fails loud
+# in brand.json instead of erroring at dispatch. Update if Meta revises ODAX.
+VALID_META_OBJECTIVES = frozenset({
+    "OUTCOME_AWARENESS",
+    "OUTCOME_TRAFFIC",
+    "OUTCOME_ENGAGEMENT",
+    "OUTCOME_LEADS",
+    "OUTCOME_APP_PROMOTION",
+    "OUTCOME_SALES",
+})
+
+
 @dataclass(frozen=True)
 class DesiredCampaign:
     """A campaign the operator declares should exist, for the create_campaign
     reconciler. Only `meta` is supported today (the only executor that can
     create). `status` is intentionally absent — the proposer always forces
-    PAUSED, which the guardrails require anyway."""
+    PAUSED, which the guardrails require anyway.
+
+    `ad_set`, when present, is a normalized (snake_case) Meta ad-set spec the
+    executor creates under the new campaign so it launches as something
+    populated rather than an empty shell. Also always PAUSED."""
     platform: str
     name: str
     objective: str
     daily_budget: float | None = None
     special_ad_categories: list[str] = field(default_factory=list)
+    ad_set: dict[str, Any] | None = None
+
+
+def _normalize_ad_set(a: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Map the camelCase brand.json ad-set block to the snake_case shape the
+    mutation/executor layer uses. Only known fields pass through."""
+    if a is None:
+        return None
+    out: dict[str, Any] = {
+        "name": a["name"],
+        "optimization_goal": a["optimizationGoal"],
+        "billing_event": a["billingEvent"],
+        "targeting": a["targeting"],
+    }
+    if a.get("dailyBudget") is not None:
+        out["daily_budget"] = float(a["dailyBudget"])
+    if a.get("bidStrategy"):
+        out["bid_strategy"] = a["bidStrategy"]
+    if a.get("bidAmount") is not None:
+        out["bid_amount"] = float(a["bidAmount"])
+    if a.get("promotedObject"):
+        out["promoted_object"] = a["promotedObject"]
+    return out
 
 
 @dataclass(frozen=True)
@@ -115,6 +154,7 @@ class Brand:
                 objective=s["objective"],
                 daily_budget=(float(s["dailyBudget"]) if s.get("dailyBudget") is not None else None),
                 special_ad_categories=list(s.get("specialAdCategories", [])),
+                ad_set=_normalize_ad_set(s.get("adSet")),
             )
             for s in specs
         ]
@@ -240,6 +280,11 @@ def _validate_desired_campaigns(dc: Any) -> None:
                 f"brand.json: {where}.objective is required and must be a non-empty string "
                 "(a Meta campaign objective, e.g. OUTCOME_LEADS)"
             )
+        if s["objective"] not in VALID_META_OBJECTIVES:
+            raise BrandConfigError(
+                f"brand.json: {where}.objective {s['objective']!r} is not a valid Meta "
+                f"objective. Use one of: {', '.join(sorted(VALID_META_OBJECTIVES))}."
+            )
         if s.get("dailyBudget") is not None:
             v = s["dailyBudget"]
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
@@ -248,6 +293,31 @@ def _validate_desired_campaigns(dc: Any) -> None:
             v = s["specialAdCategories"]
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                 raise BrandConfigError(f"brand.json: {where}.specialAdCategories must be an array of strings")
+        if "adSet" in s:
+            _validate_ad_set(s["adSet"], f"{where}.adSet")
+
+
+def _validate_ad_set(a: Any, where: str) -> None:
+    if not isinstance(a, dict):
+        raise BrandConfigError(f"brand.json: {where} must be an object")
+    for req in ("name", "optimizationGoal", "billingEvent"):
+        if not isinstance(a.get(req), str) or not a[req].strip():
+            raise BrandConfigError(f"brand.json: {where}.{req} is required and must be a non-empty string")
+    if not isinstance(a.get("targeting"), dict) or not a["targeting"]:
+        raise BrandConfigError(
+            f"brand.json: {where}.targeting is required and must be a non-empty object "
+            '(e.g. {"geo_locations": {"countries": ["US"]}})'
+        )
+    if a.get("dailyBudget") is not None:
+        v = a["dailyBudget"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise BrandConfigError(f"brand.json: {where}.dailyBudget must be a positive number")
+    if a.get("bidAmount") is not None:
+        v = a["bidAmount"]
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+            raise BrandConfigError(f"brand.json: {where}.bidAmount must be a positive number")
+    if "promotedObject" in a and not isinstance(a["promotedObject"], dict):
+        raise BrandConfigError(f"brand.json: {where}.promotedObject must be an object")
 
 
 def load_or_raise(brand_json: Path | None = None) -> Brand:
