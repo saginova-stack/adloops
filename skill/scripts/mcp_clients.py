@@ -426,6 +426,22 @@ class MetaAdsClient:
             ))
         return out
 
+    def fetch_campaign_names(self) -> list[str]:
+        """Every campaign name in the account, regardless of delivery or status.
+
+        The create_campaign reconciler needs the *full* inventory: a campaign
+        it created last run launches PAUSED with no delivery, so it never shows
+        up in the spend-filtered `fetch_perf_7d` rows. Matching against this
+        avoids recreating it every run. Cheap dedicated query (name only).
+        """
+        url = (
+            f"https://graph.facebook.com/{self.GRAPH_VERSION}/"
+            f"{self.account_id}/campaigns"
+        )
+        params = {"fields": "name", "limit": "500", "access_token": self.token}
+        rows = _fetch_paged(url, params, items_key="data")
+        return [r["name"] for r in rows if r.get("name")]
+
     def _fetch_campaign_meta(self) -> dict[str, dict[str, Any]]:
         """Return {campaign_id: {name, status, daily_budget, budget_source}}.
 

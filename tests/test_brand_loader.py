@@ -172,3 +172,73 @@ def test_non_integer_max_proposals_rejected(tmp_path: Path):
     _write(p, raw)
     with pytest.raises(BrandConfigError, match="integer"):
         load_or_raise(p)
+
+
+# ---- guardrails.proposer.desiredCampaigns (create_campaign reconciler) ----
+
+def _with_desired(*specs):
+    raw = json.loads(json.dumps(VALID))
+    raw["guardrails"]["proposer"] = {"desiredCampaigns": list(specs)}
+    return raw
+
+
+def test_desired_campaigns_parsed_into_specs(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(
+        {"platform": "meta", "name": "Q3 Leads", "objective": "OUTCOME_LEADS",
+         "dailyBudget": 25, "specialAdCategories": ["EMPLOYMENT"]},
+    ))
+    specs = load_or_raise(p).desired_campaigns
+    assert len(specs) == 1
+    s = specs[0]
+    assert (s.platform, s.name, s.objective) == ("meta", "Q3 Leads", "OUTCOME_LEADS")
+    assert s.daily_budget == 25.0
+    assert s.special_ad_categories == ["EMPLOYMENT"]
+
+
+def test_desired_campaigns_absent_yields_empty(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, VALID)
+    assert load_or_raise(p).desired_campaigns == []
+
+
+def test_desired_campaign_non_meta_platform_rejected(tmp_path: Path):
+    """Only Meta's executor can create campaigns today; declaring a Google one
+    must fail loud at load time, not silently error every run at dispatch."""
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({"platform": "google", "name": "x", "objective": "SALES"}))
+    with pytest.raises(BrandConfigError, match="must be \"meta\""):
+        load_or_raise(p)
+
+
+def test_desired_campaign_missing_objective_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({"platform": "meta", "name": "x"}))
+    with pytest.raises(BrandConfigError, match="objective is required"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_missing_name_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired({"platform": "meta", "objective": "OUTCOME_LEADS"}))
+    with pytest.raises(BrandConfigError, match="name is required"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_non_positive_budget_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(
+        {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS", "dailyBudget": 0},
+    ))
+    with pytest.raises(BrandConfigError, match="dailyBudget must be a positive number"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_bad_special_ad_categories_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(
+        {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS",
+         "specialAdCategories": "EMPLOYMENT"},
+    ))
+    with pytest.raises(BrandConfigError, match="specialAdCategories must be an array"):
+        load_or_raise(p)

@@ -201,3 +201,16 @@ def test_meta_client_missing_credentials(monkeypatch):
     monkeypatch.delenv("META_AD_ACCOUNT_ID", raising=False)
     with pytest.raises(MissingCredentialsError, match="Meta Ads"):
         MetaAdsClient()
+
+
+def test_meta_fetch_campaign_names_returns_full_inventory(monkeypatch):
+    """The reconciler needs every campaign name — including zero-delivery PAUSED
+    ones that never appear in the spend-filtered perf rows."""
+    _meta_env(monkeypatch)
+
+    def fake_paged(url, params, *, items_key, headers=None, max_pages=50):
+        assert "/campaigns" in url and params.get("fields") == "name"
+        return [{"name": "Live One"}, {"name": "Paused Zero-Spend"}, {"id": "no-name"}]
+
+    monkeypatch.setattr(mcp_clients, "_fetch_paged", fake_paged)
+    assert MetaAdsClient().fetch_campaign_names() == ["Live One", "Paused Zero-Spend"]
