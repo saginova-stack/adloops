@@ -127,6 +127,8 @@ Reads use direct Python SDKs (Google Ads, GA4 Data, Meta Marketing Graph, Linked
 
 Writes go through the vendored MCPs. Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph (no public MCP shim exists). LinkedIn writes are wired but locked behind Phase 3.
 
+Meta budget changes are budget-location-aware: the executor GETs the live budget before writing, so a change scales the campaign budget on Campaign Budget Optimization (Advantage Campaign Budget) accounts and fans out proportionally across ad-set budgets on the common non-CBO setup — daily or lifetime. Reads mirror this: a non-CBO campaign's `daily_budget` is the sum of its ad-set daily budgets. Meta `create_campaign` is supported (guardrails force it to launch PAUSED); no proposer rule emits it automatically — it's reached via an explicitly constructed mutation or `--approve`.
+
 Meta has no public MCP shim (the official Meta Ads CLI announced April 2026 is CLI-only); we hit the Marketing Graph API directly via the same auth Meta's CLI uses.
 
 Run `./install.sh` from the repo root for the one-time setup that prepares both vendored MCPs (installs uv, runs `uv sync` on adloop, `npm install && npm run build` on the LinkedIn MCP).

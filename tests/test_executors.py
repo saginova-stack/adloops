@@ -151,22 +151,156 @@ def test_meta_pause_builds_correct_request(monkeypatch):
     assert sent == [("POST", "/123", {"status": "PAUSED"}, "TOK")]
 
 
-def test_meta_budget_change_uses_cents(monkeypatch):
-    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+def _meta_http_recorder(monkeypatch):
     sent = []
 
     def fake_http(method, path, body, token):
-        sent.append((method, path, body, token))
-        return {"success": True}
+        sent.append((method, path, body))
+        return {"success": True, "id": path.lstrip("/")}
 
     monkeypatch.setattr(meta, "_http", fake_http)
+    return sent
+
+
+def test_meta_budget_change_scales_campaign_level_budget(monkeypatch):
+    """CBO campaign: budget lives on the campaign. A 50→40 change is a 0.8
+    ratio, applied to the *live* budget we GET — not the stale 40 from the
+    audit — so a manual bump between audit and dispatch isn't clobbered."""
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    sent = _meta_http_recorder(monkeypatch)
+    # Live budget drifted up to $60 (6000 cents) since the audit read $50.
+    monkeypatch.setattr(meta, "_get", lambda path, params, token: {"daily_budget": "6000"})
 
     m = Mutation(platform="meta", campaign_id="123", campaign_name="x",
                  kind="budget_change",
                  before={"daily_budget": 50.00}, after={"daily_budget": 40.00})
     meta.dispatch(m, dry_run=False)
-    # 40.00 dollars → "4000" cents (string).
-    assert sent[0][2] == {"daily_budget": "4000"}
+    # 0.8 ratio against the live 6000 cents → 4800, not the stale 4000.
+    assert sent == [("POST", "/123", {"daily_budget": "4800"})]
+
+
+def test_meta_budget_change_scales_campaign_lifetime_budget(monkeypatch):
+    """CBO campaign on a lifetime budget: scale lifetime_budget, not daily."""
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    sent = _meta_http_recorder(monkeypatch)
+    monkeypatch.setattr(
+        meta, "_get",
+        lambda path, params, token: {"daily_budget": None, "lifetime_budget": "100000"},
+    )
+
+    m = Mutation(platform="meta", campaign_id="123", campaign_name="x",
+                 kind="budget_change",
+                 before={"daily_budget": 50.0}, after={"daily_budget": 40.0})
+    meta.dispatch(m, dry_run=False)
+    assert sent == [("POST", "/123", {"lifetime_budget": "80000"})]
+
+
+def test_meta_budget_change_fans_out_across_adsets_non_cbo(monkeypatch):
+    """Non-CBO campaign: no campaign budget, so every budgeted ad set is scaled
+    by the same ratio. This preserves the relative allocation across ad sets."""
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    sent = _meta_http_recorder(monkeypatch)
+
+    def fake_get(path, params, token):
+        if path.endswith("/adsets"):
+            return {"data": [
+                {"id": "AS1", "daily_budget": "3000"},
+                {"id": "AS2", "daily_budget": "2000"},
+            ]}
+        return {}  # campaign has neither daily nor lifetime → non-CBO
+
+    monkeypatch.setattr(meta, "_get", fake_get)
+
+    m = Mutation(platform="meta", campaign_id="C1", campaign_name="x",
+                 kind="budget_change",
+                 before={"daily_budget": 50.0}, after={"daily_budget": 40.0})
+    meta.dispatch(m, dry_run=False)
+    # 0.8 ratio: AS1 3000→2400, AS2 2000→1600. Each ad set, not the campaign.
+    assert sent == [
+        ("POST", "/AS1", {"daily_budget": "2400"}),
+        ("POST", "/AS2", {"daily_budget": "1600"}),
+    ]
+
+
+def test_meta_budget_change_raises_when_no_budget_found(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    _meta_http_recorder(monkeypatch)
+    monkeypatch.setattr(
+        meta, "_get",
+        lambda path, params, token: {"data": []} if path.endswith("/adsets") else {},
+    )
+    m = Mutation(platform="meta", campaign_id="C1", campaign_name="x",
+                 kind="budget_change",
+                 before={"daily_budget": 50.0}, after={"daily_budget": 40.0})
+    with pytest.raises(MetaExecutorError, match="Could not locate"):
+        meta.dispatch(m, dry_run=False)
+
+
+def test_meta_budget_change_dry_run_resolves_but_does_not_post(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    posted = []
+    monkeypatch.setattr(meta, "_http", lambda *a, **kw: posted.append(a))
+    monkeypatch.setattr(meta, "_get", lambda path, params, token: {"daily_budget": "5000"})
+
+    m = Mutation(platform="meta", campaign_id="123", campaign_name="x",
+                 kind="budget_change",
+                 before={"daily_budget": 50.0}, after={"daily_budget": 40.0})
+    result = meta.dispatch(m, dry_run=True)
+    assert posted == []  # no mutating POST
+    assert result["dry_run"] is True
+    assert result["requests"] == [
+        {"method": "POST", "path": "/123", "body": {"daily_budget": "4000"}}
+    ]
+
+
+def test_meta_budget_change_rejects_non_positive_before(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    m = Mutation(platform="meta", campaign_id="123", campaign_name="x",
+                 kind="budget_change",
+                 before={"daily_budget": 0.0}, after={"daily_budget": 40.0})
+    with pytest.raises(MetaExecutorError, match="before.daily_budget"):
+        meta.dispatch(m, dry_run=False)
+
+
+# ---- Meta create_campaign -----------------------------------------------
+
+def test_meta_create_campaign_posts_to_account(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    sent = _meta_http_recorder(monkeypatch)
+
+    m = Mutation(platform="meta", campaign_id="", campaign_name="Q3 Launch",
+                 kind="create_campaign",
+                 after={"name": "Q3 Launch", "objective": "OUTCOME_LEADS",
+                        "status": "PAUSED", "daily_budget": 25.0})
+    meta.dispatch(m, dry_run=False)
+    method, path, body = sent[0]
+    assert (method, path) == ("POST", "/act_42/campaigns")
+    assert body["name"] == "Q3 Launch"
+    assert body["objective"] == "OUTCOME_LEADS"
+    assert body["status"] == "PAUSED"
+    assert body["daily_budget"] == "2500"
+    # special_ad_categories is required by the Graph API — [] serialized to JSON.
+    assert body["special_ad_categories"] == "[]"
+
+
+def test_meta_create_campaign_requires_account(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.delenv("META_AD_ACCOUNT_ID", raising=False)
+    m = Mutation(platform="meta", campaign_id="", campaign_name="x",
+                 kind="create_campaign",
+                 after={"name": "x", "objective": "OUTCOME_LEADS", "status": "PAUSED"})
+    with pytest.raises(MetaExecutorError, match="META_AD_ACCOUNT_ID"):
+        meta.dispatch(m, dry_run=False)
+
+
+def test_meta_create_campaign_requires_name_and_objective(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    m = Mutation(platform="meta", campaign_id="", campaign_name="x",
+                 kind="create_campaign", after={"status": "PAUSED"})
+    with pytest.raises(MetaExecutorError, match="after.name and after.objective"):
+        meta.dispatch(m, dry_run=False)
 
 
 def test_meta_dry_run_returns_planned_request_without_calling_http(monkeypatch):

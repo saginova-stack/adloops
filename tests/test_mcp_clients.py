@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import pytest
 
+import scripts.mcp_clients as mcp_clients
 from scripts.mcp_clients import (
     CampaignPerf,
     GoogleAnalyticsClient,
+    MetaAdsClient,
     MissingCredentialsError,
 )
 
@@ -118,3 +120,84 @@ def test_ga4_client_falls_back_to_oauth_refresh_token(monkeypatch):
     monkeypatch.setenv("GOOGLE_ADS_REFRESH_TOKEN", "fake-refresh")
     # Shouldn't raise — OAuth fallback is acceptable.
     GoogleAnalyticsClient()
+
+
+# ---------- Meta ad-set / lifetime budget resolution ----------
+
+def _meta_env(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_1")
+
+
+def _fake_paged_factory(campaigns, adsets, insights):
+    def fake_paged(url, params, *, items_key, headers=None, max_pages=50):
+        if "/insights" in url:
+            return insights
+        if "/adsets" in url:
+            return adsets
+        if "/campaigns" in url:
+            return campaigns
+        return []
+    return fake_paged
+
+
+def test_meta_non_cbo_campaign_sums_adset_daily_budgets(monkeypatch):
+    """The whole point of ad-set budget support: a campaign with no
+    campaign-level budget must report the sum of its ad-set daily budgets,
+    otherwise the proposer never proposes a budget change for it."""
+    _meta_env(monkeypatch)
+    monkeypatch.setattr(mcp_clients, "_fetch_paged", _fake_paged_factory(
+        campaigns=[{"id": "C1", "name": "Prospecting", "status": "ACTIVE"}],  # no budget
+        adsets=[
+            {"campaign_id": "C1", "daily_budget": "3000"},
+            {"campaign_id": "C1", "daily_budget": "2000"},
+        ],
+        insights=[{"campaign_id": "C1", "campaign_name": "Prospecting",
+                   "spend": "40", "impressions": "1000", "clicks": "50",
+                   "actions": [{"action_type": "lead", "value": "4"}]}],
+    ))
+    rows = MetaAdsClient().fetch_perf_7d()
+    assert len(rows) == 1
+    # 3000 + 2000 cents = $50.00
+    assert rows[0].daily_budget == 50.0
+    assert rows[0].extra["meta_budget"] == {"level": "adset", "type": "daily"}
+
+
+def test_meta_cbo_campaign_uses_campaign_daily_budget(monkeypatch):
+    """CBO campaign keeps its budget on the campaign — no ad-set summing."""
+    _meta_env(monkeypatch)
+    monkeypatch.setattr(mcp_clients, "_fetch_paged", _fake_paged_factory(
+        campaigns=[{"id": "C1", "name": "CBO", "status": "ACTIVE", "daily_budget": "8000"}],
+        adsets=[],
+        insights=[{"campaign_id": "C1", "campaign_name": "CBO", "spend": "10",
+                   "impressions": "100", "clicks": "5", "actions": []}],
+    ))
+    rows = MetaAdsClient().fetch_perf_7d()
+    assert rows[0].daily_budget == 80.0
+    assert rows[0].extra["meta_budget"] == {"level": "campaign", "type": "daily"}
+
+
+def test_meta_lifetime_only_campaign_has_no_daily_but_records_source(monkeypatch):
+    """A campaign whose only budget is a lifetime budget has no daily figure —
+    daily_budget stays None (proposer skips it) but the lifetime amount is
+    still surfaced so the write path and report can use it."""
+    _meta_env(monkeypatch)
+    monkeypatch.setattr(mcp_clients, "_fetch_paged", _fake_paged_factory(
+        campaigns=[{"id": "C1", "name": "Burst", "status": "ACTIVE",
+                    "lifetime_budget": "500000"}],
+        adsets=[],
+        insights=[{"campaign_id": "C1", "campaign_name": "Burst", "spend": "10",
+                   "impressions": "100", "clicks": "5", "actions": []}],
+    ))
+    rows = MetaAdsClient().fetch_perf_7d()
+    assert rows[0].daily_budget is None
+    assert rows[0].extra["meta_budget"] == {
+        "level": "campaign", "type": "lifetime", "lifetime_budget": 5000.0,
+    }
+
+
+def test_meta_client_missing_credentials(monkeypatch):
+    monkeypatch.delenv("META_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("META_AD_ACCOUNT_ID", raising=False)
+    with pytest.raises(MissingCredentialsError, match="Meta Ads"):
+        MetaAdsClient()
