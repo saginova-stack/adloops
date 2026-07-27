@@ -7,7 +7,9 @@ from scripts.mcp_clients import (
     CampaignPerf,
     GoogleAnalyticsClient,
     MetaAdsClient,
+    MetaTargetingResolver,
     MissingCredentialsError,
+    TargetingResolutionError,
 )
 
 
@@ -214,3 +216,57 @@ def test_meta_fetch_campaign_names_returns_full_inventory(monkeypatch):
 
     monkeypatch.setattr(mcp_clients, "_fetch_paged", fake_paged)
     assert MetaAdsClient().fetch_campaign_names() == ["Live One", "Paused Zero-Spend"]
+
+
+# ---------- MetaTargetingResolver (ICP → targeting) ----------
+
+def _resolver_with_search(monkeypatch, fake_search):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    r = MetaTargetingResolver()
+    r._search = fake_search  # the single network seam
+    return r
+
+
+def test_targeting_resolver_builds_geo_interests_and_exclusions(monkeypatch):
+    """ICP free-text becomes a valid Meta spec: geo from icp.geo, interests from
+    personas+industries (top match by reach), exclusions from negativeSignals."""
+    def fake_search(t, q):
+        if t == "adgeolocation":
+            return [{"type": "country", "country_code": "US", "name": "United States"}]
+        table = {
+            "B2B SaaS": [{"id": "1", "name": "SaaS", "audience_size": 100},
+                         {"id": "2", "name": "B2B", "audience_size": 500}],
+            "Head of Growth": [{"id": "3", "name": "Growth", "audience_size_lower_bound": 300}],
+            "Students": [{"id": "9", "name": "Students", "audience_size": 9000}],
+        }
+        return table.get(q, [])
+
+    r = _resolver_with_search(monkeypatch, fake_search)
+    icp = {"geo": ["United States"], "personas": ["Head of Growth"],
+           "industries": ["B2B SaaS"], "negativeSignals": ["Students"]}
+    t = r.resolve(icp)
+    assert t["geo_locations"] == {"countries": ["US"]}
+    interests = t["flexible_spec"][0]["interests"]
+    # "B2B SaaS" → id 2 (reach 500) beats id 1 (100); persona → id 3.
+    assert {i["id"] for i in interests} == {"3", "2"}
+    assert t["exclusions"]["interests"] == [{"id": "9", "name": "Students"}]
+
+
+def test_targeting_resolver_omits_interests_when_none_resolve(monkeypatch):
+    def fake_search(t, q):
+        return [{"type": "country", "country_code": "GB"}] if t == "adgeolocation" else []
+    r = _resolver_with_search(monkeypatch, fake_search)
+    t = r.resolve({"geo": ["United Kingdom"], "personas": ["Nonexistent"]})
+    assert t == {"geo_locations": {"countries": ["GB"]}}
+
+
+def test_targeting_resolver_raises_when_no_geo_resolves(monkeypatch):
+    r = _resolver_with_search(monkeypatch, lambda t, q: [])
+    with pytest.raises(TargetingResolutionError, match="geo"):
+        r.resolve({"geo": ["Atlantis"]})
+
+
+def test_targeting_resolver_missing_token(monkeypatch):
+    monkeypatch.delenv("META_ACCESS_TOKEN", raising=False)
+    with pytest.raises(MissingCredentialsError, match="Meta Targeting"):
+        MetaTargetingResolver()
