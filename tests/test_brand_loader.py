@@ -333,3 +333,29 @@ def test_desired_campaign_ad_set_targeting_and_from_icp_mutually_exclusive(tmp_p
     _write(p, raw)
     with pytest.raises(BrandConfigError, match="exactly one of"):
         load_or_raise(p)
+
+
+def test_icp_age_valid_accepted(tmp_path: Path):
+    raw = json.loads(json.dumps(VALID))
+    raw["icp"]["age"] = {"min": 25, "max": 54}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    load_or_raise(p)  # should not raise
+
+
+def test_icp_age_out_of_range_rejected(tmp_path: Path):
+    raw = json.loads(json.dumps(VALID))
+    raw["icp"]["age"] = {"min": 5}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    with pytest.raises(BrandConfigError, match=r"icp.age.min must be an integer in \[13, 65\]"):
+        load_or_raise(p)
+
+
+def test_icp_age_min_greater_than_max_rejected(tmp_path: Path):
+    raw = json.loads(json.dumps(VALID))
+    raw["icp"]["age"] = {"min": 60, "max": 30}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    with pytest.raises(BrandConfigError, match="min must be"):
+        load_or_raise(p)

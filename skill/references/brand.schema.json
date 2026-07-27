@@ -23,7 +23,20 @@
       "properties": {
         "personas": { "type": "array", "items": { "type": "string" } },
         "industries": { "type": "array", "items": { "type": "string" } },
-        "companySizes": { "type": "array", "items": { "type": "string" } },
+        "companySizes": {
+          "description": "Company-size segments. Used by targetingFromIcp — resolved best-effort as Meta interest/behavior segments (Meta has no first-class company-size facet), so use recognizable phrases like \"Small business owners\".",
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "age": {
+          "description": "Optional age range for targetingFromIcp → Meta age_min / age_max. Either bound may be omitted.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "min": { "type": "integer", "minimum": 13, "maximum": 65 },
+            "max": { "type": "integer", "minimum": 13, "maximum": 65 }
+          }
+        },
         "geo": { "type": "array", "items": { "type": "string" } },
         "painPoints": { "type": "array", "items": { "type": "string" } },
         "negativeSignals": { "type": "array", "items": { "type": "string" } }

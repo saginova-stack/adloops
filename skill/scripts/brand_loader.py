@@ -214,6 +214,8 @@ def _validate(raw: Any) -> None:
             "brand.json: icp.personas is empty. Fill in at least one persona before "
             "AdLoops will run an audit. See references/brand.example.json for the shape."
         )
+    if icp.get("age") is not None:
+        _validate_icp_age(icp["age"])
 
     g = raw["guardrails"]
     if not isinstance(g, dict):
@@ -264,6 +266,21 @@ def _validate(raw: Any) -> None:
                 )
         if "desiredCampaigns" in prop:
             _validate_desired_campaigns(prop["desiredCampaigns"], raw["icp"])
+
+
+def _validate_icp_age(age: Any) -> None:
+    if not isinstance(age, dict):
+        raise BrandConfigError("brand.json: icp.age must be an object with optional integer min/max")
+    for k in ("min", "max"):
+        if age.get(k) is not None:
+            v = age[k]
+            if isinstance(v, bool) or not isinstance(v, int) or v < 13 or v > 65:
+                raise BrandConfigError(
+                    f"brand.json: icp.age.{k} must be an integer in [13, 65] (Meta's allowed range)"
+                )
+    lo, hi = age.get("min"), age.get("max")
+    if lo is not None and hi is not None and lo > hi:
+        raise BrandConfigError("brand.json: icp.age.min must be ≤ icp.age.max")
 
 
 def _validate_desired_campaigns(dc: Any, icp: dict) -> None:
