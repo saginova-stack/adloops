@@ -375,6 +375,72 @@ def test_pause_ranks_above_create_under_a_tight_cap():
     assert ms[0].kind == "pause"
 
 
+# ---- create_campaign: ICP-derived targeting -------------------------------
+
+class _FakeResolver:
+    def __init__(self, targeting):
+        self.targeting = targeting
+        self.calls = 0
+
+    def resolve(self, icp):
+        self.calls += 1
+        return self.targeting
+
+
+class _BoomResolver:
+    def resolve(self, icp):
+        raise RuntimeError("meta down")
+
+
+def _icp_ad_set():
+    return {"name": "US", "optimizationGoal": "LEAD_GENERATION",
+            "billingEvent": "IMPRESSIONS", "targetingFromIcp": True}
+
+
+def test_create_with_targeting_from_icp_uses_injected_resolver():
+    r = meta_report(existing_names=["other"])
+    fake = _FakeResolver({"geo_locations": {"countries": ["US"]}})
+    ms = propose(
+        r,
+        brand_with(proposer={"desiredCampaigns": [_desired(adSet=_icp_ad_set())]}),
+        targeting_resolver=fake,
+    )
+    assert len(ms) == 1
+    ad_set = ms[0].after["ad_set"]
+    assert ad_set["targeting"] == {"geo_locations": {"countries": ["US"]}}
+    assert "targeting_from_icp" not in ad_set   # marker consumed
+    assert fake.calls == 1
+
+
+def test_targeting_from_icp_resolved_once_and_reused():
+    r = meta_report(existing_names=[])
+    fake = _FakeResolver({"geo_locations": {"countries": ["US"]}})
+    propose(
+        r,
+        brand_with(proposer={"desiredCampaigns": [
+            _desired(name="A", adSet=_icp_ad_set()),
+            _desired(name="B", adSet=_icp_ad_set()),
+        ]}),
+        targeting_resolver=fake,
+    )
+    assert fake.calls == 1  # resolved once, shared across both creates
+
+
+def test_create_targeting_from_icp_degrades_on_resolver_error():
+    """A resolver failure must not crash the run or silently drop the campaign:
+    create the shell, no ad set, and record the reason for the report."""
+    r = meta_report(existing_names=["other"])
+    ms = propose(
+        r,
+        brand_with(proposer={"desiredCampaigns": [_desired(adSet=_icp_ad_set())]}),
+        targeting_resolver=_BoomResolver(),
+    )
+    assert len(ms) == 1
+    after = ms[0].after
+    assert "ad_set" not in after           # shell only
+    assert "meta down" in after["ad_set_error"]
+
+
 # ---- create_campaign: ad-set scaffolding + budget drift -------------------
 
 def test_create_carries_ad_set_into_mutation():

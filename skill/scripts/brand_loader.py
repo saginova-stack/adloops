@@ -81,8 +81,13 @@ def _normalize_ad_set(a: dict[str, Any] | None) -> dict[str, Any] | None:
         "name": a["name"],
         "optimization_goal": a["optimizationGoal"],
         "billing_event": a["billingEvent"],
-        "targeting": a["targeting"],
     }
+    # Either explicit targeting or a marker to derive it from the brand's ICP
+    # at propose time (resolved via Meta Targeting Search).
+    if a.get("targetingFromIcp"):
+        out["targeting_from_icp"] = True
+    elif a.get("targeting") is not None:
+        out["targeting"] = a["targeting"]
     if a.get("dailyBudget") is not None:
         out["daily_budget"] = float(a["dailyBudget"])
     if a.get("bidStrategy"):
@@ -258,10 +263,10 @@ def _validate(raw: Any) -> None:
                     "brand.json: guardrails.proposer.maxProposalsPerRun must be a positive integer"
                 )
         if "desiredCampaigns" in prop:
-            _validate_desired_campaigns(prop["desiredCampaigns"])
+            _validate_desired_campaigns(prop["desiredCampaigns"], raw["icp"])
 
 
-def _validate_desired_campaigns(dc: Any) -> None:
+def _validate_desired_campaigns(dc: Any, icp: dict) -> None:
     if not isinstance(dc, list):
         raise BrandConfigError("brand.json: guardrails.proposer.desiredCampaigns must be an array")
     for i, s in enumerate(dc):
@@ -294,19 +299,28 @@ def _validate_desired_campaigns(dc: Any) -> None:
             if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
                 raise BrandConfigError(f"brand.json: {where}.specialAdCategories must be an array of strings")
         if "adSet" in s:
-            _validate_ad_set(s["adSet"], f"{where}.adSet")
+            _validate_ad_set(s["adSet"], f"{where}.adSet", icp)
 
 
-def _validate_ad_set(a: Any, where: str) -> None:
+def _validate_ad_set(a: Any, where: str, icp: dict) -> None:
     if not isinstance(a, dict):
         raise BrandConfigError(f"brand.json: {where} must be an object")
     for req in ("name", "optimizationGoal", "billingEvent"):
         if not isinstance(a.get(req), str) or not a[req].strip():
             raise BrandConfigError(f"brand.json: {where}.{req} is required and must be a non-empty string")
-    if not isinstance(a.get("targeting"), dict) or not a["targeting"]:
+    has_explicit = isinstance(a.get("targeting"), dict) and bool(a["targeting"])
+    derive = a.get("targetingFromIcp")
+    if derive is not None and not isinstance(derive, bool):
+        raise BrandConfigError(f"brand.json: {where}.targetingFromIcp must be a boolean")
+    if bool(derive) == has_explicit:
         raise BrandConfigError(
-            f"brand.json: {where}.targeting is required and must be a non-empty object "
-            '(e.g. {"geo_locations": {"countries": ["US"]}})'
+            f"brand.json: {where} must set exactly one of `targeting` (a non-empty object, "
+            'e.g. {"geo_locations": {"countries": ["US"]}}) or `targetingFromIcp: true`.'
+        )
+    if derive and not (icp.get("geo") or []):
+        raise BrandConfigError(
+            f"brand.json: {where}.targetingFromIcp needs at least one icp.geo entry — "
+            "Meta requires a geo location and there's nothing to resolve one from."
         )
     if a.get("dailyBudget") is not None:
         v = a["dailyBudget"]

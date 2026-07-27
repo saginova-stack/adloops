@@ -49,7 +49,7 @@ from .brand_loader import (
     ProposerThresholds,
 )
 from .guardrails import Mutation
-from .mcp_clients import CampaignPerf
+from .mcp_clients import CampaignPerf, MetaTargetingResolver
 
 
 # Re-exports for callers that previously imported these directly. Live
@@ -63,11 +63,16 @@ MAX_PROPOSALS_PER_RUN = DEFAULT_MAX_PROPOSALS_PER_RUN
 
 # ---- propose ---------------------------------------------------------------
 
-def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
+def propose(report: AuditReport, brand: Brand, *, targeting_resolver=None) -> list[Mutation]:
     """Build a deduped, capped list of Mutation proposals for this audit run.
 
     A single campaign gets at most one proposal per run — if it qualifies
     for both a pause and a budget change, pause wins (more conservative).
+
+    `targeting_resolver` is only used when a desired campaign's ad set asks to
+    derive targeting from the ICP (`targetingFromIcp`). It's injectable for
+    tests; in production it defaults to a live MetaTargetingResolver, built
+    lazily so runs with no such campaigns never touch the network.
     """
     cap_pct = brand.max_daily_budget_change_pct
     th = brand.thresholds
@@ -102,7 +107,7 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
     # Desired-state reconciliation runs last: protecting existing spend
     # (pauses, cuts) outranks spinning up new PAUSED campaigns and nudging
     # declared budgets when the per-run cap is tight.
-    for m in _propose_desired_campaigns(report, brand):
+    for m in _propose_desired_campaigns(report, brand, targeting_resolver):
         if not _accept(m):
             return out
     return out
@@ -212,7 +217,9 @@ def _propose_increase_on_cpa_drop(
 
 # ---- desired-state reconciliation ------------------------------------------
 
-def _propose_desired_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mutation]:
+def _propose_desired_campaigns(
+    report: AuditReport, brand: Brand, targeting_resolver=None
+) -> Iterable[Mutation]:
     """Reconcile `brand.desired_campaigns` against the account.
 
     Two deterministic behaviours per declared campaign:
@@ -248,13 +255,18 @@ def _propose_desired_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mu
                 (c.platform, c.campaign_name.strip().casefold()), []
             ).append(c)
 
+    targeting_cache: dict[str, Any] = {}  # ICP targeting resolved once, reused
+
     for spec in desired:
         existing = names_by_platform.get(spec.platform)
         if existing is None:
             continue  # inventory unavailable → never risk a duplicate or bad drift
         key = spec.name.strip().casefold()
         if key not in existing:
-            yield _make_create_campaign(spec)
+            ad_set, ad_set_error = _resolve_ad_set_for_create(
+                spec, brand, targeting_resolver, targeting_cache
+            )
+            yield _make_create_campaign(spec, ad_set=ad_set, ad_set_error=ad_set_error)
             continue
         # Already present → maybe reconcile budget drift toward the declared target.
         if spec.daily_budget is None:
@@ -284,7 +296,32 @@ def _propose_desired_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mu
         )
 
 
-def _make_create_campaign(spec) -> Mutation:
+def _resolve_ad_set_for_create(
+    spec, brand: Brand, resolver, cache: dict[str, Any]
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Return (ad_set, error). Explicit targeting passes straight through; a
+    `targetingFromIcp` ad set has its targeting resolved from the brand's ICP
+    (once per run, cached). On resolver failure we return (None, message) so the
+    campaign is still created as a shell and the reason is surfaced — never a
+    silent drop or a whole-run crash."""
+    a = spec.ad_set
+    if a is None:
+        return None, None
+    if not a.get("targeting_from_icp"):
+        return a, None
+    ad_set = {k: v for k, v in a.items() if k != "targeting_from_icp"}
+    try:
+        if "t" not in cache:
+            r = resolver or MetaTargetingResolver()
+            cache["t"] = r.resolve(brand.raw.get("icp", {}))
+        ad_set["targeting"] = cache["t"]
+        return ad_set, None
+    except Exception as e:  # noqa: BLE001 — degrade gracefully, surface the reason
+        return None, f"ICP targeting could not be resolved: {type(e).__name__}: {e}"
+
+
+def _make_create_campaign(spec, *, ad_set: dict[str, Any] | None,
+                          ad_set_error: str | None = None) -> Mutation:
     after: dict[str, Any] = {
         "name": spec.name,
         "objective": spec.objective,
@@ -293,8 +330,10 @@ def _make_create_campaign(spec) -> Mutation:
     }
     if spec.daily_budget is not None:
         after["daily_budget"] = spec.daily_budget
-    if spec.ad_set is not None:
-        after["ad_set"] = spec.ad_set
+    if ad_set is not None:
+        after["ad_set"] = ad_set
+    if ad_set_error:
+        after["ad_set_error"] = ad_set_error
     return Mutation(
         platform=spec.platform,
         campaign_id="",  # Meta assigns the id when the campaign is created

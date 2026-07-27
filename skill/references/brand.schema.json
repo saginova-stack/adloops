@@ -124,10 +124,14 @@
                     "items": { "type": "string" }
                   },
                   "adSet": {
-                    "description": "Optional default ad set created under the new campaign so it launches populated rather than empty. Also launches PAUSED.",
+                    "description": "Optional default ad set created under the new campaign so it launches populated rather than empty. Also launches PAUSED. Set exactly one of `targeting` or `targetingFromIcp`.",
                     "type": "object",
-                    "required": ["name", "optimizationGoal", "billingEvent", "targeting"],
+                    "required": ["name", "optimizationGoal", "billingEvent"],
                     "additionalProperties": false,
+                    "oneOf": [
+                      { "required": ["targeting"] },
+                      { "required": ["targetingFromIcp"] }
+                    ],
                     "properties": {
                       "name": { "type": "string", "minLength": 1 },
                       "optimizationGoal": {
@@ -141,9 +145,13 @@
                         "minLength": 1
                       },
                       "targeting": {
-                        "description": "Meta targeting spec, e.g. {\"geo_locations\": {\"countries\": [\"US\"]}}.",
+                        "description": "Explicit Meta targeting spec, e.g. {\"geo_locations\": {\"countries\": [\"US\"]}}. Mutually exclusive with targetingFromIcp.",
                         "type": "object",
                         "minProperties": 1
+                      },
+                      "targetingFromIcp": {
+                        "description": "Derive targeting from the brand's ICP at propose time via Meta Targeting Search: icp.geo → geo_locations, icp.personas/industries → interests, icp.negativeSignals → exclusions. Requires at least one icp.geo entry. Mutually exclusive with targeting.",
+                        "type": "boolean"
                       },
                       "dailyBudget": {
                         "description": "Ad-set daily budget in account-currency major units (non-CBO campaigns). Omit when the campaign carries a CBO budget.",

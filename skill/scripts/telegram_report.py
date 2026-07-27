@@ -153,6 +153,8 @@ def _action_detail(mut: dict) -> str:
         budget_str = f" · {_fmt_money(budget)}/day" if budget is not None else ""
         if after.get("ad_set"):
             tail = "with a default ad set · launches PAUSED — review & enable to go live"
+        elif after.get("ad_set_error"):
+            tail = f"ad set skipped ({after['ad_set_error']}) · launches PAUSED"
         else:
             tail = "launches PAUSED — add ad sets & enable to go live"
         return f"{obj}{budget_str} · {tail}"

@@ -681,3 +681,15 @@ def test_create_campaign_action_notes_scaffolded_ad_set():
     body = "\n".join(render_report(r))
     assert "with a default ad set" in body
     assert "review & enable to go live" in body
+
+
+def test_create_campaign_action_surfaces_ad_set_error():
+    """When ICP targeting can't be resolved the campaign shell is still created;
+    the report must say the ad set was skipped and why, not hide it."""
+    after = {"name": "Q3 Leads", "objective": "OUTCOME_LEADS", "status": "PAUSED",
+             "daily_budget": 25.0,
+             "ad_set_error": "ICP targeting could not be resolved: RuntimeError: meta down"}
+    r = make_report(actions_taken=[_create_action(after)])
+    body = "\n".join(render_report(r))
+    assert "ad set skipped" in body
+    assert "meta down" in body

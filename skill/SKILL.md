@@ -134,7 +134,12 @@ Meta `create_campaign` is supported and has an auto-proposer: list the campaigns
 - **Missing** → propose `create_campaign`, always PAUSED, always through the guardrails (so `newCampaignRequiresApproval` still gates it). The match is by name against every campaign in the account, not just those with delivery, so a paused campaign created last run is never recreated; if the inventory can't be fetched, nothing is proposed.
 - **Present but budget drifted** → if the spec declares a `dailyBudget` and the live daily budget differs, propose a `budget_change` that steps toward the target within the per-run cap (stays AUTO, converges over runs). Only fires when exactly one live campaign matches the name and its budget is visible.
 
-Add an `adSet` block (`name`, `optimizationGoal`, `billingEvent`, `targeting`; optional `dailyBudget`, `bidStrategy`, `bidAmount`, `promotedObject`) and the executor scaffolds that ad set under the new campaign — also PAUSED — so it launches populated rather than empty. The report's "Actions taken" line spells out the objective, budget, whether an ad set was scaffolded, and that it launches PAUSED for you to review and enable.
+Add an `adSet` block (`name`, `optimizationGoal`, `billingEvent`; optional `dailyBudget`, `bidStrategy`, `bidAmount`, `promotedObject`) and the executor scaffolds that ad set under the new campaign — also PAUSED — so it launches populated rather than empty. For targeting, set **exactly one** of:
+
+- `targeting` — an explicit Meta targeting spec, e.g. `{"geo_locations": {"countries": ["US"]}}`.
+- `targetingFromIcp: true` — derive it from the brand's ICP at propose time via Meta's Targeting Search API (deterministic, no LLM): `icp.geo` → `geo_locations`, `icp.personas` + `icp.industries` → interests (top match by audience reach), `icp.negativeSignals` → exclusions. Requires at least one `icp.geo` entry (validated at load). If resolution fails at run time, the campaign is still created as a shell and the report notes the ad set was skipped and why.
+
+The report's "Actions taken" line spells out the objective, budget, whether an ad set was scaffolded, and that it launches PAUSED for you to review and enable.
 
 Meta has no public MCP shim (the official Meta Ads CLI announced April 2026 is CLI-only); we hit the Marketing Graph API directly via the same auth Meta's CLI uses.
 

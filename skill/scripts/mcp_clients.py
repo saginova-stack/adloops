@@ -539,6 +539,115 @@ class MetaAdsClient:
         return agg
 
 
+class TargetingResolutionError(RuntimeError):
+    """ICP could not be resolved into a valid Meta targeting spec (e.g. no geo
+    term matched). The caller degrades: create the campaign shell without the
+    ad set and surface this."""
+
+
+class MetaTargetingResolver:
+    """Resolve a brand's ICP free-text into a Meta targeting spec, deterministically.
+
+    Uses Meta's Targeting Search API — no LLM in the loop (Rule 5: code answers).
+    - `icp.geo` → `geo_locations` (each term's top adgeolocation match)
+    - `icp.personas` + `icp.industries` → interests (each term's highest-reach
+      adinterest match), under `flexible_spec`
+    - `icp.negativeSignals` → `exclusions.interests` (best-effort)
+
+    Geo is required and must resolve to at least one location, or we raise —
+    Meta rejects an ad set with no geo. Interests/exclusions are best-effort.
+    The `_search` method is the single network seam (tests patch it).
+    """
+
+    REQUIRED_ENV = ("META_ACCESS_TOKEN",)
+    GRAPH_VERSION = "v22.0"
+
+    def __init__(self):
+        missing = [k for k in self.REQUIRED_ENV if not os.environ.get(k)]
+        if missing:
+            raise MissingCredentialsError(f"Meta Targeting: missing env {missing}")
+        self.token = os.environ["META_ACCESS_TOKEN"]
+
+    def resolve(self, icp: dict[str, Any]) -> dict[str, Any]:
+        geo = self._resolve_geo(list(icp.get("geo") or []))
+        if not geo:
+            raise TargetingResolutionError(
+                "No icp.geo term resolved to a Meta location; cannot build targeting."
+            )
+        targeting: dict[str, Any] = {"geo_locations": geo}
+        interests = self._resolve_interests(
+            list(icp.get("personas") or []) + list(icp.get("industries") or [])
+        )
+        if interests:
+            targeting["flexible_spec"] = [{"interests": interests}]
+        excluded = self._resolve_interests(list(icp.get("negativeSignals") or []))
+        if excluded:
+            targeting["exclusions"] = {"interests": excluded}
+        return targeting
+
+    def _resolve_geo(self, terms: list[str]) -> dict[str, Any]:
+        geo: dict[str, Any] = {}
+        for t in terms:
+            cands = self._search("adgeolocation", t)
+            if not cands:
+                continue
+            top = cands[0]
+            typ = top.get("type")
+            if typ == "region" and top.get("key"):
+                geo.setdefault("regions", []).append({"key": top["key"]})
+            elif typ == "city" and top.get("key"):
+                geo.setdefault("cities", []).append({"key": top["key"]})
+            elif top.get("country_code"):
+                geo.setdefault("countries", []).append(top["country_code"])
+        if "countries" in geo:
+            geo["countries"] = sorted(set(geo["countries"]))
+        return geo
+
+    def _resolve_interests(self, terms: list[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for t in terms:
+            cands = self._search("adinterest", t)
+            if not cands:
+                continue
+            # Top match by audience reach — deterministic tie-break on id.
+            top = max(cands, key=lambda c: (_audience_reach(c), c.get("id") or ""))
+            iid = top.get("id")
+            if iid and iid not in seen:
+                seen.add(iid)
+                out.append({"id": iid, "name": top.get("name")})
+        return out
+
+    def _search(self, search_type: str, q: str) -> list[dict[str, Any]]:
+        url = f"https://graph.facebook.com/{self.GRAPH_VERSION}/search"
+        params = {"type": search_type, "q": q, "limit": "25", "access_token": self.token}
+        if search_type == "adgeolocation":
+            params["location_types"] = json.dumps(["country", "region", "city"])
+        req = urllib.request.Request(url + "?" + urllib.parse.urlencode(params), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                body = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            raise TargetingResolutionError(
+                f"Meta Targeting Search HTTP {e.code} for {search_type} {q!r}: "
+                f"{e.read().decode('utf-8', 'replace')}"
+            ) from e
+        except urllib.error.URLError as e:
+            raise TargetingResolutionError(
+                f"Meta Targeting Search transport error for {search_type} {q!r}: {e.reason}"
+            ) from e
+        return body.get("data", [])
+
+
+def _audience_reach(candidate: dict[str, Any]) -> int:
+    """Best available audience-size figure for an adinterest candidate."""
+    for k in ("audience_size_lower_bound", "audience_size"):
+        v = candidate.get(k)
+        if isinstance(v, (int, float)):
+            return int(v)
+    return 0
+
+
 def _meta_minor_to_major(value: Any) -> float | None:
     """Meta budgets come back as minor-unit strings (cents). Normalize to
     account-currency major units. None passes through as None."""

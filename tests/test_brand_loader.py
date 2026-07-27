@@ -287,5 +287,49 @@ def test_desired_campaign_ad_set_requires_targeting(tmp_path: Path):
         "adSet": {"name": "US", "optimizationGoal": "LEAD_GENERATION",
                   "billingEvent": "IMPRESSIONS", "targeting": {}},
     }))
-    with pytest.raises(BrandConfigError, match="targeting is required"):
+    with pytest.raises(BrandConfigError, match="exactly one of"):
+        load_or_raise(p)
+
+
+def _icp_ad_set():
+    return {"name": "US", "optimizationGoal": "LEAD_GENERATION",
+            "billingEvent": "IMPRESSIONS", "targetingFromIcp": True}
+
+
+def test_desired_campaign_targeting_from_icp_parsed(tmp_path: Path):
+    raw = json.loads(json.dumps(VALID))
+    raw["icp"]["geo"] = ["United States"]
+    raw["guardrails"]["proposer"] = {"desiredCampaigns": [
+        {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS", "adSet": _icp_ad_set()},
+    ]}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    spec = load_or_raise(p).desired_campaigns[0]
+    assert spec.ad_set["targeting_from_icp"] is True
+    assert "targeting" not in spec.ad_set
+
+
+def test_desired_campaign_targeting_from_icp_requires_geo(tmp_path: Path):
+    """Meta needs a geo location; if the ad set defers to ICP there must be an
+    icp.geo to resolve one from — caught at load, not at Meta dispatch."""
+    raw = json.loads(json.dumps(VALID))  # VALID has no icp.geo
+    raw["guardrails"]["proposer"] = {"desiredCampaigns": [
+        {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS", "adSet": _icp_ad_set()},
+    ]}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    with pytest.raises(BrandConfigError, match="icp.geo"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_ad_set_targeting_and_from_icp_mutually_exclusive(tmp_path: Path):
+    raw = json.loads(json.dumps(VALID))
+    raw["icp"]["geo"] = ["United States"]
+    both = {**_icp_ad_set(), "targeting": {"geo_locations": {"countries": ["US"]}}}
+    raw["guardrails"]["proposer"] = {"desiredCampaigns": [
+        {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS", "adSet": both},
+    ]}
+    p = tmp_path / "brand.json"
+    _write(p, raw)
+    with pytest.raises(BrandConfigError, match="exactly one of"):
         load_or_raise(p)
