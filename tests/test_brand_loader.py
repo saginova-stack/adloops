@@ -359,3 +359,55 @@ def test_icp_age_min_greater_than_max_rejected(tmp_path: Path):
     _write(p, raw)
     with pytest.raises(BrandConfigError, match="min must be"):
         load_or_raise(p)
+
+
+def _ad_set_base(**extra):
+    a = {"name": "US", "optimizationGoal": "LEAD_GENERATION", "billingEvent": "IMPRESSIONS",
+         "targeting": {"geo_locations": {"countries": ["US"]}}}
+    a.update(extra)
+    return a
+
+
+def _desired_with_ad_set(ad_set):
+    return {"platform": "meta", "name": "x", "objective": "OUTCOME_LEADS", "adSet": ad_set}
+
+
+def test_desired_campaign_custom_audiences_parsed(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(_desired_with_ad_set(
+        _ad_set_base(customAudiences=[{"id": "1"}, {"name": "SMB 50-200"}]))))
+    spec = load_or_raise(p).desired_campaigns[0]
+    assert spec.ad_set["custom_audiences"] == [{"id": "1"}, {"name": "SMB 50-200"}]
+
+
+def test_desired_campaign_custom_audience_both_id_and_name_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(_desired_with_ad_set(
+        _ad_set_base(customAudiences=[{"id": "1", "name": "x"}]))))
+    with pytest.raises(BrandConfigError, match="exactly one of"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_lookalike_parsed(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(_desired_with_ad_set(_ad_set_base(
+        lookalikeAudiences=[{"name": "LAL", "seed": {"name": "Seed"},
+                             "country": "US", "ratio": 0.03}]))))
+    lal = load_or_raise(p).desired_campaigns[0].ad_set["lookalike_audiences"][0]
+    assert lal["ratio"] == 0.03 and lal["seed"] == {"name": "Seed"}
+
+
+def test_desired_campaign_lookalike_bad_ratio_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(_desired_with_ad_set(_ad_set_base(
+        lookalikeAudiences=[{"name": "LAL", "seed": {"id": "1"}, "country": "US", "ratio": 2}]))))
+    with pytest.raises(BrandConfigError, match="ratio must be"):
+        load_or_raise(p)
+
+
+def test_desired_campaign_lookalike_missing_seed_rejected(tmp_path: Path):
+    p = tmp_path / "brand.json"
+    _write(p, _with_desired(_desired_with_ad_set(_ad_set_base(
+        lookalikeAudiences=[{"name": "LAL", "country": "US", "ratio": 0.03}]))))
+    with pytest.raises(BrandConfigError, match="seed"):
+        load_or_raise(p)

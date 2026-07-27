@@ -3,6 +3,8 @@
 Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
 
 > Phase 1 (read-only audit + GA4 cross-reference), Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations), and Phase 3 (LinkedIn mutation executor) shipped. LinkedIn mutations still need Marketing Developer Platform approval before they can run against live accounts — the code is in place and tested against MCP mocks.
+>
+> Meta support goes beyond campaign-level CBO budgets: budget changes are ad-set- and lifetime-budget aware, and a **desired-state reconciler** creates any campaigns you declare in `brand.json` that are missing (always PAUSED, through the guardrails) and reconciles budget drift on ones that exist. Declared campaigns can scaffold a default ad set whose targeting is explicit, **derived from the brand ICP** (geo / interests / company size / age via Meta Targeting Search), or attached from **Custom / Lookalike Audiences** you bring — the real path for firmographic targeting Meta has no native facet for.
 
 **New to AdLoops?** Start with [`ONBOARDING.md`](./ONBOARDING.md) — a guided
 zero-to-first-report path with every onboarding gotcha inlined (Manager-account
@@ -20,12 +22,12 @@ adloops/
 │   │   ├── brand_loader.py
 │   │   ├── guardrails.py        ← hard rules + audit log, wired in front of every mutation
 │   │   ├── mcp_clients.py       ← Google / Meta / LinkedIn read clients + GA4 enrichment
-│   │   ├── mutations.py         ← proposer: pause zombies, ±cap% on CPA spike/drop
+│   │   ├── mutations.py         ← proposer: pause zombies, ±cap% on CPA spike/drop, desired-state campaign reconciliation (Meta)
 │   │   ├── mcp_runner.py        ← synchronous MCP stdio JSON-RPC client
 │   │   ├── executors/
 │   │   │   ├── google.py        ← adloop MCP preview/confirm
 │   │   │   ├── linkedin.py      ← linkedin-ads MCP update_campaign
-│   │   │   └── meta.py          ← Marketing Graph API direct
+│   │   │   └── meta.py          ← Marketing Graph API direct (ad-set/lifetime budgets, create_campaign + ad-set scaffolding, Custom/Lookalike Audiences)
 │   │   ├── recommender.py       ← OpenRouter → Anthropic → rule-based chain
 │   │   └── telegram_report.py
 │   ├── references/
@@ -34,7 +36,7 @@ adloops/
 │   └── mcp-servers/             ← vendored submodules
 │       ├── adloop/              → kLOsk/adloop @ v0.7.0 (Google Ads + GA4 cross-reference)
 │       └── linkedin-ads/        → danielpopamd/linkedin-ads-mcp @ 05a2761
-├── tests/                       ← 198 tests covering every module
+├── tests/                       ← 269 tests covering every module
 ├── install.sh                   ← one-shot first-run install (uv + submodule build + venv)
 ├── setup.md                     ← operator-facing setup (creds, cron, exit codes)
 └── requirements.txt

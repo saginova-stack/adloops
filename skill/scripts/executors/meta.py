@@ -139,26 +139,99 @@ def _dispatch_create_campaign(m: Mutation, token: str, *, dry_run: bool) -> dict
             f"Campaign created but the Graph API returned no id ({campaign!r}); "
             "cannot scaffold the ad set."
         )
+    audience_ids = _resolve_ad_set_audiences(ad_set_cfg, token)
     ad_set = _http(
         "POST", f"/{_account_id()}/adsets",
-        _ad_set_body(ad_set_cfg, campaign_id=str(new_id)), token,
+        _ad_set_body(ad_set_cfg, campaign_id=str(new_id), audience_ids=audience_ids), token,
     )
     return {"campaign": campaign, "ad_set": ad_set}
 
 
-def _ad_set_body(cfg: dict[str, Any], *, campaign_id: str) -> dict[str, Any]:
+def _resolve_ad_set_audiences(cfg: dict[str, Any], token: str) -> list[str]:
+    """Resolve declared Custom/Lookalike Audiences to concrete ids.
+
+    Custom audiences given by id pass through; by name are looked up in the
+    account. Lookalikes are found-or-created idempotently by name from a seed
+    audience. Meta has no company-size facet, so this is how firmographic
+    targeting actually happens: the operator brings the audience, we attach it.
+    Returns [] when none are declared.
+    """
+    customs = cfg.get("custom_audiences") or []
+    lookalikes = cfg.get("lookalike_audiences") or []
+    if not customs and not lookalikes:
+        return []
+    account = _account_id()
+    # Only list the account's audiences when something must be resolved by name.
+    needs_index = any(not r.get("id") for r in customs) or bool(lookalikes)
+    name_to_id = _audience_name_index(account, token) if needs_index else {}
+
+    ids: list[str] = []
+    for ref in customs:
+        ids.append(_audience_ref_to_id(ref, name_to_id))
+    for lal in lookalikes:
+        ids.append(_find_or_create_lookalike(lal, account, token, name_to_id))
+    return ids
+
+
+def _audience_name_index(account: str, token: str) -> dict[str, str]:
+    rows = _get(
+        f"/{account}/customaudiences", {"fields": "id,name", "limit": "500"}, token
+    ).get("data", [])
+    return {r["name"].strip().casefold(): str(r["id"]) for r in rows if r.get("name")}
+
+
+def _audience_ref_to_id(ref: dict[str, Any], name_to_id: dict[str, str]) -> str:
+    if ref.get("id"):
+        return str(ref["id"])
+    aid = name_to_id.get(ref["name"].strip().casefold())
+    if not aid:
+        raise ExecutorError(
+            f"Custom audience named {ref['name']!r} not found in the ad account."
+        )
+    return aid
+
+
+def _find_or_create_lookalike(
+    lal: dict[str, Any], account: str, token: str, name_to_id: dict[str, str]
+) -> str:
+    """Idempotent: reuse a lookalike already named `lal['name']`, else create one
+    from the seed audience so we don't spawn a duplicate every run."""
+    existing = name_to_id.get(lal["name"].strip().casefold())
+    if existing:
+        return existing
+    seed_id = _audience_ref_to_id(lal["seed"], name_to_id)
+    resp = _http("POST", f"/{account}/customaudiences", {
+        "name": lal["name"],
+        "subtype": "LOOKALIKE",
+        "origin_audience_id": seed_id,
+        "lookalike_spec": json.dumps({"ratio": lal["ratio"], "country": lal["country"]}),
+    }, token)
+    new_id = resp.get("id")
+    if not new_id:
+        raise ExecutorError(
+            f"Lookalike {lal['name']!r} create returned no id ({resp!r})."
+        )
+    return str(new_id)
+
+
+def _ad_set_body(cfg: dict[str, Any], *, campaign_id: str,
+                 audience_ids: list[str] | None = None) -> dict[str, Any]:
     """Build the /adsets POST body from a normalized (snake_case) ad-set spec.
 
     Forces status=PAUSED and injects the parent campaign id. Budgets convert to
     minor units; targeting/promoted_object are JSON-encoded as the Graph API
-    expects."""
+    expects. `audience_ids` (resolved Custom/Lookalike Audience ids) are layered
+    onto the base targeting as `custom_audiences`."""
+    targeting = dict(cfg.get("targeting") or {})
+    if audience_ids:
+        targeting["custom_audiences"] = [{"id": aid} for aid in audience_ids]
     body: dict[str, Any] = {
         "name": cfg["name"],
         "campaign_id": campaign_id,
         "optimization_goal": cfg["optimization_goal"],
         "billing_event": cfg["billing_event"],
         "status": "PAUSED",
-        "targeting": json.dumps(cfg["targeting"]),
+        "targeting": json.dumps(targeting),
     }
     if cfg.get("daily_budget") is not None:
         body["daily_budget"] = str(_to_cents(cfg["daily_budget"]))

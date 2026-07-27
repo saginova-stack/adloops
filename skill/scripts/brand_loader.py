@@ -96,6 +96,14 @@ def _normalize_ad_set(a: dict[str, Any] | None) -> dict[str, Any] | None:
         out["bid_amount"] = float(a["bidAmount"])
     if a.get("promotedObject"):
         out["promoted_object"] = a["promotedObject"]
+    if a.get("customAudiences"):
+        out["custom_audiences"] = [dict(x) for x in a["customAudiences"]]
+    if a.get("lookalikeAudiences"):
+        out["lookalike_audiences"] = [
+            {"name": l["name"], "seed": dict(l["seed"]),
+             "country": l["country"], "ratio": float(l["ratio"])}
+            for l in a["lookalikeAudiences"]
+        ]
     return out
 
 
@@ -349,6 +357,44 @@ def _validate_ad_set(a: Any, where: str, icp: dict) -> None:
             raise BrandConfigError(f"brand.json: {where}.bidAmount must be a positive number")
     if "promotedObject" in a and not isinstance(a["promotedObject"], dict):
         raise BrandConfigError(f"brand.json: {where}.promotedObject must be an object")
+    if "customAudiences" in a:
+        _validate_custom_audiences(a["customAudiences"], f"{where}.customAudiences")
+    if "lookalikeAudiences" in a:
+        _validate_lookalike_audiences(a["lookalikeAudiences"], f"{where}.lookalikeAudiences")
+
+
+def _validate_audience_ref(x: Any, where: str) -> None:
+    """An audience reference is exactly one of a string `id` or a string `name`."""
+    if not isinstance(x, dict):
+        raise BrandConfigError(f"brand.json: {where} must be an object with an id or name")
+    has_id = isinstance(x.get("id"), str) and x["id"].strip()
+    has_name = isinstance(x.get("name"), str) and x["name"].strip()
+    if bool(has_id) == bool(has_name):
+        raise BrandConfigError(f"brand.json: {where} must set exactly one of `id` or `name`")
+
+
+def _validate_custom_audiences(ca: Any, where: str) -> None:
+    if not isinstance(ca, list) or not ca:
+        raise BrandConfigError(f"brand.json: {where} must be a non-empty array")
+    for j, x in enumerate(ca):
+        _validate_audience_ref(x, f"{where}[{j}]")
+
+
+def _validate_lookalike_audiences(la: Any, where: str) -> None:
+    if not isinstance(la, list) or not la:
+        raise BrandConfigError(f"brand.json: {where} must be a non-empty array")
+    for j, l in enumerate(la):
+        w = f"{where}[{j}]"
+        if not isinstance(l, dict):
+            raise BrandConfigError(f"brand.json: {w} must be an object")
+        if not isinstance(l.get("name"), str) or not l["name"].strip():
+            raise BrandConfigError(f"brand.json: {w}.name is required (the new lookalike's name)")
+        _validate_audience_ref(l.get("seed"), f"{w}.seed")
+        if not isinstance(l.get("country"), str) or not l["country"].strip():
+            raise BrandConfigError(f"brand.json: {w}.country is required (e.g. \"US\")")
+        ratio = l.get("ratio")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not (0 < ratio <= 1):
+            raise BrandConfigError(f"brand.json: {w}.ratio must be a number in (0, 1] (e.g. 0.03 for 3%)")
 
 
 def load_or_raise(brand_json: Path | None = None) -> Brand:
