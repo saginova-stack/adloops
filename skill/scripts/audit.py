@@ -38,6 +38,10 @@ class PlatformResult:
     # its own field so a working ga4_status isn't masked by a flaky landing
     # query.
     ga4_landing_status: str | None = None
+    # Full campaign-name inventory for the create_campaign reconciler, when the
+    # platform can supply it (Meta only today). None means "inventory unknown"
+    # — the reconciler then proposes no creates rather than risk a duplicate.
+    existing_campaign_names: list[str] | None = None
 
     def totals(self) -> dict[str, float]:
         spend = sum(c.spend for c in self.campaigns)
@@ -118,7 +122,16 @@ def fetch_all(enabled_platforms: set[str]) -> list[PlatformResult]:
             continue
         try:
             campaigns = client.fetch_perf_7d()
-            results.append(PlatformResult(plat, enabled=True, fetched=True, error=None, campaigns=campaigns))
+            pr = PlatformResult(plat, enabled=True, fetched=True, error=None, campaigns=campaigns)
+            # Only platforms whose executor can create campaigns need the full
+            # name inventory (Meta today). Best-effort: a failure here leaves it
+            # None so the reconciler stays on the safe side.
+            if plat == "meta" and hasattr(client, "fetch_campaign_names"):
+                try:
+                    pr.existing_campaign_names = client.fetch_campaign_names()
+                except Exception:  # noqa: BLE001 — inventory is best-effort
+                    pr.existing_campaign_names = None
+            results.append(pr)
         except Exception as e:  # noqa: BLE001 — top-level audit is best-effort per platform
             results.append(PlatformResult(plat, enabled=True, fetched=False, error=f"{type(e).__name__}: {e}"))
     enrich_google_with_ga4(results)

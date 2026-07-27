@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,19 @@ class ProposerThresholds:
     decrease_cpa_spike_pct: float = DEFAULT_DECREASE_CPA_SPIKE_PCT
     increase_cpa_drop_pct: float = DEFAULT_INCREASE_CPA_DROP_PCT
     max_proposals_per_run: int = DEFAULT_MAX_PROPOSALS_PER_RUN
+
+
+@dataclass(frozen=True)
+class DesiredCampaign:
+    """A campaign the operator declares should exist, for the create_campaign
+    reconciler. Only `meta` is supported today (the only executor that can
+    create). `status` is intentionally absent — the proposer always forces
+    PAUSED, which the guardrails require anyway."""
+    platform: str
+    name: str
+    objective: str
+    daily_budget: float | None = None
+    special_ad_categories: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -89,6 +102,22 @@ class Brand:
                 p.get("maxProposalsPerRun", DEFAULT_MAX_PROPOSALS_PER_RUN)
             ),
         )
+
+    @property
+    def desired_campaigns(self) -> list[DesiredCampaign]:
+        """Campaigns declared for the create_campaign reconciler. Empty when
+        `guardrails.proposer.desiredCampaigns` is absent — the default."""
+        specs = (self.raw["guardrails"].get("proposer") or {}).get("desiredCampaigns") or []
+        return [
+            DesiredCampaign(
+                platform=s["platform"],
+                name=s["name"],
+                objective=s["objective"],
+                daily_budget=(float(s["dailyBudget"]) if s.get("dailyBudget") is not None else None),
+                special_ad_categories=list(s.get("specialAdCategories", [])),
+            )
+            for s in specs
+        ]
 
 
 REQUIRED_TOP_LEVEL = ("company", "icp", "valueProps", "brandVoice", "guardrails")
@@ -188,6 +217,37 @@ def _validate(raw: Any) -> None:
                 raise BrandConfigError(
                     "brand.json: guardrails.proposer.maxProposalsPerRun must be a positive integer"
                 )
+        if "desiredCampaigns" in prop:
+            _validate_desired_campaigns(prop["desiredCampaigns"])
+
+
+def _validate_desired_campaigns(dc: Any) -> None:
+    if not isinstance(dc, list):
+        raise BrandConfigError("brand.json: guardrails.proposer.desiredCampaigns must be an array")
+    for i, s in enumerate(dc):
+        where = f"guardrails.proposer.desiredCampaigns[{i}]"
+        if not isinstance(s, dict):
+            raise BrandConfigError(f"brand.json: {where} must be an object")
+        if s.get("platform") != "meta":
+            raise BrandConfigError(
+                f'brand.json: {where}.platform must be "meta" — the only platform '
+                "whose executor can create campaigns today."
+            )
+        if not isinstance(s.get("name"), str) or not s["name"].strip():
+            raise BrandConfigError(f"brand.json: {where}.name is required and must be a non-empty string")
+        if not isinstance(s.get("objective"), str) or not s["objective"].strip():
+            raise BrandConfigError(
+                f"brand.json: {where}.objective is required and must be a non-empty string "
+                "(a Meta campaign objective, e.g. OUTCOME_LEADS)"
+            )
+        if s.get("dailyBudget") is not None:
+            v = s["dailyBudget"]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                raise BrandConfigError(f"brand.json: {where}.dailyBudget must be a positive number")
+        if "specialAdCategories" in s:
+            v = s["specialAdCategories"]
+            if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+                raise BrandConfigError(f"brand.json: {where}.specialAdCategories must be an array of strings")
 
 
 def load_or_raise(brand_json: Path | None = None) -> Brand:

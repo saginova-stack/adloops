@@ -37,7 +37,7 @@ historical/example values.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from .audit import AuditReport, CampaignDelta, PlatformResult
 from .brand_loader import (
@@ -77,6 +77,17 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
     perf_index = _index_perf(report.platforms)
     delta_index = _index_deltas(report.deltas)
 
+    def _accept(m: Mutation) -> bool:
+        """Dedup + append one proposal. Returns False once the per-run cap is
+        hit so the caller stops. A create_campaign has no id yet, so the dedup
+        key falls back to the campaign name."""
+        key = (m.platform, m.campaign_id or m.campaign_name)
+        if key in seen:
+            return True
+        seen.add(key)
+        out.append(m)
+        return len(out) < th.max_proposals_per_run
+
     # Order matters: pause first (highest priority), then decreases, then
     # increases. A campaign that qualifies for multiple rules only gets the
     # first match.
@@ -86,13 +97,14 @@ def propose(report: AuditReport, brand: Brand) -> list[Mutation]:
         _propose_increase_on_cpa_drop,
     ):
         for m in proposer(report, perf_index, delta_index, cap_pct, th):
-            key = (m.platform, m.campaign_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            out.append(m)
-            if len(out) >= th.max_proposals_per_run:
+            if not _accept(m):
                 return out
+    # Desired-state reconciliation runs last: protecting existing spend
+    # (pauses, cuts) outranks spinning up new PAUSED campaigns when the
+    # per-run cap is tight.
+    for m in _propose_missing_campaigns(report, brand):
+        if not _accept(m):
+            return out
     return out
 
 
@@ -194,6 +206,57 @@ def _propose_increase_on_cpa_drop(
                 f"CPA down {drop_pct:+.0f}% and conversions up "
                 f"({d.conversions_prev:.0f} → {d.conversions_now:.0f}); "
                 f"increasing budget by the {cap_pct:.0f}% cap to scale a winner."
+            ),
+        )
+
+
+# ---- desired-state reconciliation ------------------------------------------
+
+def _propose_missing_campaigns(report: AuditReport, brand: Brand) -> Iterable[Mutation]:
+    """Propose create_campaign for every declared campaign not already present.
+
+    Deterministic reconciliation of `brand.desired_campaigns` against the
+    account's live campaign-name inventory (`PlatformResult.existing_campaign_names`).
+    Safety invariants:
+      - Every proposal is forced to status=PAUSED — the operator cannot declare
+        a campaign that launches live. Guardrails enforce this again downstream.
+      - A platform whose inventory is unknown (fetch failed → names is None) is
+        skipped entirely, so a transient read error never spawns a duplicate.
+      - Name match is case-insensitive on the trimmed name.
+    """
+    desired = brand.desired_campaigns
+    if not desired:
+        return
+    names_by_platform: dict[str, set[str]] = {}
+    for pr in report.platforms:
+        if pr.existing_campaign_names is not None:
+            names_by_platform[pr.platform] = {
+                n.strip().casefold() for n in pr.existing_campaign_names
+            }
+    for spec in desired:
+        existing = names_by_platform.get(spec.platform)
+        if existing is None:
+            continue  # inventory unavailable → never risk a duplicate
+        if spec.name.strip().casefold() in existing:
+            continue  # already present
+        after: dict[str, Any] = {
+            "name": spec.name,
+            "objective": spec.objective,
+            "status": "PAUSED",
+            "special_ad_categories": list(spec.special_ad_categories),
+        }
+        if spec.daily_budget is not None:
+            after["daily_budget"] = spec.daily_budget
+        yield Mutation(
+            platform=spec.platform,
+            campaign_id="",  # Meta assigns the id when the campaign is created
+            campaign_name=spec.name,
+            kind="create_campaign",
+            before={},
+            after=after,
+            reason=(
+                f"Declared in brand.json but not found in the {spec.platform} "
+                "account; creating it PAUSED for you to populate and launch."
             ),
         )
 

@@ -422,32 +422,127 @@ class MetaAdsClient:
                 clicks=int(r.get("clicks") or 0),
                 conversions=conv,
                 revenue=rev,
+                extra={"meta_budget": m["budget_source"]} if m.get("budget_source") else {},
             ))
         return out
 
+    def fetch_campaign_names(self) -> list[str]:
+        """Every campaign name in the account, regardless of delivery or status.
+
+        The create_campaign reconciler needs the *full* inventory: a campaign
+        it created last run launches PAUSED with no delivery, so it never shows
+        up in the spend-filtered `fetch_perf_7d` rows. Matching against this
+        avoids recreating it every run. Cheap dedicated query (name only).
+        """
+        url = (
+            f"https://graph.facebook.com/{self.GRAPH_VERSION}/"
+            f"{self.account_id}/campaigns"
+        )
+        params = {"fields": "name", "limit": "500", "access_token": self.token}
+        rows = _fetch_paged(url, params, items_key="data")
+        return [r["name"] for r in rows if r.get("name")]
+
     def _fetch_campaign_meta(self) -> dict[str, dict[str, Any]]:
+        """Return {campaign_id: {name, status, daily_budget, budget_source}}.
+
+        `daily_budget` is the campaign's *effective* daily budget in account
+        currency major units. Meta only keeps a budget on the campaign when
+        Campaign Budget Optimization (Advantage Campaign Budget) is on; on the
+        common non-CBO setup the campaign budget is null and each ad set carries
+        its own budget, so we sum the ad-set daily budgets for those campaigns.
+
+        `budget_source` records where the budget lives ({"level", "type", ...})
+        so the report can show it; the executor re-resolves the live location at
+        write time rather than trusting this snapshot. Campaigns whose only
+        budget is a lifetime budget have no daily figure — daily_budget stays
+        None (the proposer skips them, which is correct: you don't nudge a
+        lifetime budget on a twice-weekly cadence) but budget_source still
+        carries the lifetime amount.
+        """
         url = (
             f"https://graph.facebook.com/{self.GRAPH_VERSION}/"
             f"{self.account_id}/campaigns"
         )
         params = {
-            "fields": "id,name,status,daily_budget",
+            "fields": "id,name,status,daily_budget,lifetime_budget",
             "limit": "500",
             "access_token": self.token,
         }
         rows = _fetch_paged(url, params, items_key="data")
         out: dict[str, dict[str, Any]] = {}
+        non_cbo: list[str] = []
         for r in rows:
-            db = r.get("daily_budget")
-            # Meta returns daily_budget as cents (string). Normalize to float
-            # in account currency major units.
-            db_f = float(db) / 100 if db is not None else None
+            # Meta returns budgets as minor units (cents). Normalize to major.
+            daily = _meta_minor_to_major(r.get("daily_budget"))
+            lifetime = _meta_minor_to_major(r.get("lifetime_budget"))
+            budget: float | None = None
+            source: dict[str, Any] | None = None
+            if daily is not None:
+                budget, source = daily, {"level": "campaign", "type": "daily"}
+            elif lifetime is not None:
+                source = {"level": "campaign", "type": "lifetime", "lifetime_budget": lifetime}
+            else:
+                non_cbo.append(r["id"])
             out[r["id"]] = {
                 "name": r.get("name"),
                 "status": r.get("status", "UNKNOWN"),
-                "daily_budget": db_f,
+                "daily_budget": budget,
+                "budget_source": source,
             }
+        if non_cbo:
+            adset = self._fetch_adset_budgets_by_campaign()
+            for cid in non_cbo:
+                agg = adset.get(cid)
+                if not agg:
+                    continue
+                if agg["has_daily"]:
+                    out[cid]["daily_budget"] = round(agg["daily"], 2)
+                    out[cid]["budget_source"] = {"level": "adset", "type": "daily"}
+                elif agg["has_lifetime"]:
+                    out[cid]["budget_source"] = {
+                        "level": "adset", "type": "lifetime",
+                        "lifetime_budget": round(agg["lifetime"], 2),
+                    }
         return out
+
+    def _fetch_adset_budgets_by_campaign(self) -> dict[str, dict[str, Any]]:
+        """Sum ad-set budgets per campaign in one account-wide call.
+
+        Returns {campaign_id: {daily, has_daily, lifetime, has_lifetime}}. Only
+        consulted for campaigns with no campaign-level budget (non-CBO).
+        """
+        url = (
+            f"https://graph.facebook.com/{self.GRAPH_VERSION}/"
+            f"{self.account_id}/adsets"
+        )
+        params = {
+            "fields": "campaign_id,daily_budget,lifetime_budget",
+            "limit": "500",
+            "access_token": self.token,
+        }
+        rows = _fetch_paged(url, params, items_key="data")
+        agg: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            cid = r.get("campaign_id")
+            if not cid:
+                continue
+            a = agg.setdefault(cid, {"daily": 0.0, "has_daily": False,
+                                     "lifetime": 0.0, "has_lifetime": False})
+            d = _meta_minor_to_major(r.get("daily_budget"))
+            l = _meta_minor_to_major(r.get("lifetime_budget"))
+            if d is not None:
+                a["daily"] += d
+                a["has_daily"] = True
+            if l is not None:
+                a["lifetime"] += l
+                a["has_lifetime"] = True
+        return agg
+
+
+def _meta_minor_to_major(value: Any) -> float | None:
+    """Meta budgets come back as minor-unit strings (cents). Normalize to
+    account-currency major units. None passes through as None."""
+    return float(value) / 100 if value is not None else None
 
 
 def _meta_actions_to_conv_rev(actions: list[dict] | None,

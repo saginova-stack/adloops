@@ -282,6 +282,99 @@ def test_partial_proposer_block_uses_defaults_for_unset_fields():
     assert ms == []
 
 
+# ---- rule: create_campaign reconciliation ---------------------------------
+
+def meta_report(*, campaigns=None, existing_names=None, deltas=None):
+    pr = PlatformResult("meta", True, True, None, campaigns or [])
+    pr.existing_campaign_names = existing_names
+    return AuditReport(
+        run_id="TEST", generated_at="2026-05-11T00:00:00Z",
+        window_start="2026-05-04", window_end="2026-05-10",
+        platforms=[pr], deltas=deltas or [],
+        top_movers_best=[], top_movers_worst=[],
+        actions_taken=[], pending_approvals=[], recommendations=[],
+    )
+
+
+def _desired(**kw):
+    base = {"platform": "meta", "name": "Q3 Leads", "objective": "OUTCOME_LEADS"}
+    base.update(kw)
+    return base
+
+
+def test_creates_declared_campaign_missing_from_account():
+    r = meta_report(existing_names=["Always-On Retargeting"])
+    ms = propose(r, brand_with(proposer={"desiredCampaigns": [_desired(dailyBudget=25.0)]}))
+    assert len(ms) == 1
+    m = ms[0]
+    assert m.kind == "create_campaign"
+    assert m.platform == "meta"
+    assert m.campaign_id == ""            # no id until Meta assigns one
+    assert m.campaign_name == "Q3 Leads"
+    assert m.after["name"] == "Q3 Leads"
+    assert m.after["objective"] == "OUTCOME_LEADS"
+    assert m.after["daily_budget"] == 25.0
+    # The reconciler forces PAUSED — the operator cannot declare a live launch.
+    assert m.after["status"] == "PAUSED"
+
+
+def test_skips_declared_campaign_that_already_exists_case_insensitive():
+    """Match is case-insensitive/trimmed so a freshly-created campaign isn't
+    recreated on the next run just because of casing differences."""
+    r = meta_report(existing_names=["  q3 LEADS "])
+    ms = propose(r, brand_with(proposer={"desiredCampaigns": [_desired()]}))
+    assert ms == []
+
+
+def test_skips_create_when_inventory_unknown():
+    """If the account inventory couldn't be fetched (names is None) we must NOT
+    propose a create — otherwise a transient read error spawns a duplicate."""
+    r = meta_report(existing_names=None)
+    ms = propose(r, brand_with(proposer={"desiredCampaigns": [_desired()]}))
+    assert ms == []
+
+
+def test_no_desired_campaigns_means_no_creates():
+    r = meta_report(existing_names=["anything"])
+    assert propose(r, brand_with()) == []
+
+
+def test_proposed_create_passes_guardrails_as_auto_when_paused():
+    """End-to-end intent: a reconciler create is PAUSED, so the guardrails
+    auto-approve it (unless the brand demands approval). If the reconciler ever
+    stopped forcing PAUSED, the guardrail would REJECT and this test fails."""
+    from scripts.guardrails import Decision, check_mutation, config_from_brand
+
+    r = meta_report(existing_names=[])
+    brand = brand_with(proposer={"desiredCampaigns": [_desired()]})
+    ms = propose(r, brand)
+    assert len(ms) == 1
+    result = check_mutation(ms[0], config_from_brand(brand))
+    assert result.decision is Decision.AUTO
+
+    brand_gated = brand_with(
+        requires_approval=True, proposer={"desiredCampaigns": [_desired()]}
+    )
+    gated = check_mutation(propose(r, brand_gated)[0], config_from_brand(brand_gated))
+    assert gated.decision is Decision.APPROVAL
+
+
+def test_pause_ranks_above_create_under_a_tight_cap():
+    """Protecting existing spend outranks spinning up new campaigns: with a
+    cap of 1, the zombie pause is emitted and the create is dropped."""
+    r = meta_report(
+        campaigns=[cp(platform="meta", campaign_id="Z", campaign_name="Zombie",
+                      spend=200.0, conversions=0)],
+        existing_names=["Zombie"],
+    )
+    ms = propose(r, brand_with(proposer={
+        "maxProposalsPerRun": 1,
+        "desiredCampaigns": [_desired()],
+    }))
+    assert len(ms) == 1
+    assert ms[0].kind == "pause"
+
+
 # ---- projected_total_spend -----------------------------------------------
 
 def test_projected_total_sums_active_with_overrides():

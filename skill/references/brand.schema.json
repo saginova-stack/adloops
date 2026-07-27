@@ -90,6 +90,34 @@
               "description": "Hard cap on proposals emitted per run. Pauses are prioritised; once the cap is hit no further proposals are evaluated.",
               "type": "integer",
               "minimum": 1
+            },
+            "desiredCampaigns": {
+              "description": "Campaigns that should exist. Each audit creates any listed campaign not already in the account, always PAUSED, through the guardrails. Only Meta is supported today. Leave absent to disable create_campaign proposals.",
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["platform", "name", "objective"],
+                "additionalProperties": false,
+                "properties": {
+                  "platform": { "const": "meta" },
+                  "name": { "type": "string", "minLength": 1 },
+                  "objective": {
+                    "description": "Meta campaign objective, e.g. OUTCOME_LEADS, OUTCOME_SALES, OUTCOME_TRAFFIC.",
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "dailyBudget": {
+                    "description": "Optional campaign-level daily budget in account-currency major units (Campaign Budget Optimization). Omit to set budgets on ad sets later.",
+                    "type": "number",
+                    "exclusiveMinimum": 0
+                  },
+                  "specialAdCategories": {
+                    "description": "Meta special ad categories (e.g. EMPLOYMENT, HOUSING, CREDIT, FINANCIAL_PRODUCTS_SERVICES). Defaults to none.",
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
             }
           }
         }
