@@ -341,6 +341,115 @@ def test_meta_create_campaign_scaffolds_ad_set_under_returned_id(monkeypatch):
     assert result == {"campaign": {"id": "C99"}, "ad_set": {"id": "AS1"}}
 
 
+def _create_with_ad_set(ad_set):
+    return Mutation(platform="meta", campaign_id="", campaign_name="Q3",
+                    kind="create_campaign",
+                    after={"name": "Q3", "objective": "OUTCOME_LEADS", "status": "PAUSED",
+                           "ad_set": ad_set})
+
+
+def _adset_targeting(**extra):
+    base = _adset_cfg()
+    base["targeting"] = {"geo_locations": {"countries": ["US"]}}
+    base.update(extra)
+    return base
+
+
+def test_meta_ad_set_attaches_custom_audience_by_id(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    sent = []
+
+    def fake_http(method, path, body, token):
+        sent.append((method, path, body))
+        return {"id": "C99"} if path.endswith("/campaigns") else {"id": "AS1"}
+
+    monkeypatch.setattr(meta, "_http", fake_http)
+    # By-id only → the account audience list must NOT be fetched.
+    monkeypatch.setattr(meta, "_get", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("_get should not be called for by-id audiences")))
+
+    meta.dispatch(_create_with_ad_set(_adset_targeting(custom_audiences=[{"id": "AUD1"}])),
+                  dry_run=False)
+    adset_body = [s for s in sent if s[1].endswith("/adsets")][0][2]
+    assert json.loads(adset_body["targeting"])["custom_audiences"] == [{"id": "AUD1"}]
+
+
+def test_meta_ad_set_resolves_custom_audience_by_name(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    sent = []
+    monkeypatch.setattr(meta, "_http", lambda method, path, body, token: (
+        sent.append((method, path, body)) or
+        ({"id": "C99"} if path.endswith("/campaigns") else {"id": "AS1"})))
+    monkeypatch.setattr(meta, "_get", lambda path, params, token: {
+        "data": [{"id": "9001", "name": "SMB 50-200 employees"}]})
+
+    meta.dispatch(_create_with_ad_set(_adset_targeting(
+        custom_audiences=[{"name": "smb 50-200 EMPLOYEES"}])), dry_run=False)  # case-insensitive
+    adset_body = [s for s in sent if s[1].endswith("/adsets")][0][2]
+    assert json.loads(adset_body["targeting"])["custom_audiences"] == [{"id": "9001"}]
+
+
+def test_meta_ad_set_custom_audience_name_not_found_raises(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    monkeypatch.setattr(meta, "_http", lambda *a, **k: {"id": "C99"})
+    monkeypatch.setattr(meta, "_get", lambda *a, **k: {"data": []})
+    with pytest.raises(MetaExecutorError, match="not found in the ad account"):
+        meta.dispatch(_create_with_ad_set(_adset_targeting(
+            custom_audiences=[{"name": "Nonexistent"}])), dry_run=False)
+
+
+def test_meta_lookalike_reused_when_already_exists(monkeypatch):
+    """Idempotent: a lookalike already named as declared is reused, not recreated
+    — otherwise every run spawns a duplicate audience object."""
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    posts = []
+    monkeypatch.setattr(meta, "_http", lambda method, path, body, token: (
+        posts.append((method, path, body)) or
+        ({"id": "C99"} if path.endswith("/campaigns") else {"id": "AS1"})))
+    monkeypatch.setattr(meta, "_get", lambda *a, **k: {
+        "data": [{"id": "LAL7", "name": "LAL - SMB"}]})
+
+    lal = {"name": "LAL - SMB", "seed": {"name": "Seed"}, "country": "US", "ratio": 0.03}
+    meta.dispatch(_create_with_ad_set(_adset_targeting(lookalike_audiences=[lal])), dry_run=False)
+    # No customaudiences POST — only campaign + adset.
+    assert [p[1] for p in posts] == ["/act_42/campaigns", "/act_42/adsets"]
+    adset_body = [p for p in posts if p[1].endswith("/adsets")][0][2]
+    assert json.loads(adset_body["targeting"])["custom_audiences"] == [{"id": "LAL7"}]
+
+
+def test_meta_lookalike_created_from_seed_when_missing(monkeypatch):
+    monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
+    monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")
+    posts = []
+
+    def fake_http(method, path, body, token):
+        posts.append((method, path, body))
+        if path.endswith("/campaigns"):
+            return {"id": "C99"}
+        if path.endswith("/customaudiences"):
+            return {"id": "LAL_NEW"}
+        return {"id": "AS1"}
+
+    monkeypatch.setattr(meta, "_http", fake_http)
+    # Seed exists, lookalike does not.
+    monkeypatch.setattr(meta, "_get", lambda *a, **k: {
+        "data": [{"id": "SEED1", "name": "Closed Won"}]})
+
+    lal = {"name": "LAL - fit", "seed": {"name": "Closed Won"}, "country": "US", "ratio": 0.03}
+    meta.dispatch(_create_with_ad_set(_adset_targeting(lookalike_audiences=[lal])), dry_run=False)
+
+    create = [p for p in posts if p[1].endswith("/customaudiences")][0][2]
+    assert create["subtype"] == "LOOKALIKE"
+    assert create["origin_audience_id"] == "SEED1"
+    assert json.loads(create["lookalike_spec"]) == {"ratio": 0.03, "country": "US"}
+    adset_body = [p for p in posts if p[1].endswith("/adsets")][0][2]
+    assert json.loads(adset_body["targeting"])["custom_audiences"] == [{"id": "LAL_NEW"}]
+
+
 def test_meta_create_campaign_with_ad_set_dry_run_posts_nothing(monkeypatch):
     monkeypatch.setenv("META_ACCESS_TOKEN", "TOK")
     monkeypatch.setenv("META_AD_ACCOUNT_ID", "act_42")

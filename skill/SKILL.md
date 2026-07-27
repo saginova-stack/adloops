@@ -1,6 +1,6 @@
 ---
 name: adloops
-description: "Twice-weekly audit and guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, joins Google Ads with GA4 to flag consent gaps and attribution discrepancies, proposes mutations within a ±20% budget cap (pause zombies, scale winners, slow CPA spikes), and posts a structured report to Telegram. LinkedIn reads work today; LinkedIn mutations land in Phase 3 once Marketing Developer Platform approval comes through. Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, or apply auto-pilot tweaks within hard guardrails."
+description: "Twice-weekly audit and guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, joins Google Ads with GA4 to flag consent gaps and attribution discrepancies, proposes mutations within a ±20% budget cap (pause zombies, scale winners, slow CPA spikes), and posts a structured report to Telegram. On Meta, budget changes are ad-set- and lifetime-budget aware (not just campaign-level CBO), and a desired-state reconciler creates any campaigns you declare in brand.json that are missing — always PAUSED, through the guardrails — optionally scaffolding a default ad set whose targeting is either explicit, derived from the brand ICP (geo, interests, company size, age via Meta Targeting Search), or attached from Custom / Lookalike Audiences you bring. LinkedIn reads work today; LinkedIn mutations land in Phase 3 once Marketing Developer Platform approval comes through. Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, apply auto-pilot tweaks within hard guardrails, or declare the Meta campaigns that should exist."
 metadata:
   {
     "openclaw": {
@@ -138,6 +138,11 @@ Add an `adSet` block (`name`, `optimizationGoal`, `billingEvent`; optional `dail
 
 - `targeting` — an explicit Meta targeting spec, e.g. `{"geo_locations": {"countries": ["US"]}}`.
 - `targetingFromIcp: true` — derive it from the brand's ICP at propose time via Meta's Targeting Search API (deterministic, no LLM): `icp.geo` → `geo_locations`; `icp.personas` + `icp.industries` → interests (top match by audience reach); `icp.companySizes` → a second interest group AND-ed with the first (best-effort — Meta has no first-class company-size facet, so use recognizable phrases like "Small business owners"); `icp.age` (`{min, max}`) → `age_min`/`age_max`; `icp.negativeSignals` → exclusions. Requires at least one `icp.geo` entry (validated at load). If resolution fails at run time, the campaign is still created as a shell and the report notes the ad set was skipped and why.
+
+For **firmographic / account-based targeting** (real company-size targeting — which Meta has no native facet for), attach audiences you bring, layered on top of the base targeting above:
+
+- `customAudiences` — a list of Meta Custom Audiences, each by `id` or `name` (names resolved to ids in the account at create time). Build the company-size audience from your CRM; this attaches it.
+- `lookalikeAudiences` — each `{name, seed: {id|name}, country, ratio}` is found-or-created idempotently (by name) from the seed audience, then attached.
 
 The report's "Actions taken" line spells out the objective, budget, whether an ad set was scaffolded, and that it launches PAUSED for you to review and enable.
 

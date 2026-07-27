@@ -176,6 +176,48 @@
                       "promotedObject": {
                         "description": "e.g. {\"pixel_id\": \"...\", \"custom_event_type\": \"LEAD\"} or {\"page_id\": \"...\"}. Required by Meta for some optimization goals.",
                         "type": "object"
+                      },
+                      "customAudiences": {
+                        "description": "Meta Custom Audiences to target (the real firmographic path — you build the company-size audience from your CRM, this attaches it). Each entry sets exactly one of id or name; names are resolved to ids in the account at create time.",
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": { "type": "string" },
+                            "name": { "type": "string" }
+                          }
+                        }
+                      },
+                      "lookalikeAudiences": {
+                        "description": "Lookalike audiences to find-or-create (idempotent by name) from a seed audience and attach as targeting.",
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "required": ["name", "seed", "country", "ratio"],
+                          "additionalProperties": false,
+                          "properties": {
+                            "name": { "type": "string", "minLength": 1 },
+                            "seed": {
+                              "description": "The seed Custom Audience (exactly one of id or name).",
+                              "type": "object",
+                              "additionalProperties": false,
+                              "properties": {
+                                "id": { "type": "string" },
+                                "name": { "type": "string" }
+                              }
+                            },
+                            "country": { "type": "string", "minLength": 2 },
+                            "ratio": {
+                              "description": "Lookalike size, 0–1 (e.g. 0.03 = top 3% most similar).",
+                              "type": "number",
+                              "exclusiveMinimum": 0,
+                              "maximum": 1
+                            }
+                          }
+                        }
                       }
                     }
                   }
