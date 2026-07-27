@@ -270,3 +270,36 @@ def test_targeting_resolver_missing_token(monkeypatch):
     monkeypatch.delenv("META_ACCESS_TOKEN", raising=False)
     with pytest.raises(MissingCredentialsError, match="Meta Targeting"):
         MetaTargetingResolver()
+
+
+def test_targeting_resolver_maps_age_and_company_size(monkeypatch):
+    """age → Meta age_min/age_max; companySizes resolve to their own
+    flexible_spec group so they AND with the persona/industry group."""
+    def fake_search(t, q):
+        if t == "adgeolocation":
+            return [{"type": "country", "country_code": "US"}]
+        table = {
+            "Head of Growth": [{"id": "3", "name": "Growth", "audience_size": 300}],
+            "Small business owners": [{"id": "7", "name": "SMB owners", "audience_size": 800}],
+        }
+        return table.get(q, [])
+
+    r = _resolver_with_search(monkeypatch, fake_search)
+    icp = {"geo": ["United States"], "personas": ["Head of Growth"],
+           "companySizes": ["Small business owners"], "age": {"min": 25, "max": 54}}
+    t = r.resolve(icp)
+    assert t["age_min"] == 25 and t["age_max"] == 54
+    # Two AND-ed groups: persona interests, then company-size interests.
+    assert t["flexible_spec"] == [
+        {"interests": [{"id": "3", "name": "Growth"}]},
+        {"interests": [{"id": "7", "name": "SMB owners"}]},
+    ]
+
+
+def test_targeting_resolver_age_bound_optional(monkeypatch):
+    def fake_search(t, q):
+        return [{"type": "country", "country_code": "US"}] if t == "adgeolocation" else []
+    r = _resolver_with_search(monkeypatch, fake_search)
+    t = r.resolve({"geo": ["US"], "age": {"min": 30}})
+    assert t["age_min"] == 30
+    assert "age_max" not in t

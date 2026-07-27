@@ -575,11 +575,24 @@ class MetaTargetingResolver:
                 "No icp.geo term resolved to a Meta location; cannot build targeting."
             )
         targeting: dict[str, Any] = {"geo_locations": geo}
-        interests = self._resolve_interests(
+        _apply_age(targeting, icp.get("age"))
+        # flexible_spec groups are AND-ed: "who they are" (persona/industry
+        # interests, OR-ed within the group) AND company size (a separate group),
+        # so declaring both narrows rather than broadens the audience.
+        flexible_spec: list[dict[str, Any]] = []
+        who = self._resolve_interests(
             list(icp.get("personas") or []) + list(icp.get("industries") or [])
         )
-        if interests:
-            targeting["flexible_spec"] = [{"interests": interests}]
+        if who:
+            flexible_spec.append({"interests": who})
+        # Meta has no first-class company-size facet — these resolve best-effort
+        # as interest/behavior segments (use Meta-recognizable phrases like
+        # "Small business owners"). Unresolved terms are simply omitted.
+        sizes = self._resolve_interests(list(icp.get("companySizes") or []))
+        if sizes:
+            flexible_spec.append({"interests": sizes})
+        if flexible_spec:
+            targeting["flexible_spec"] = flexible_spec
         excluded = self._resolve_interests(list(icp.get("negativeSignals") or []))
         if excluded:
             targeting["exclusions"] = {"interests": excluded}
@@ -637,6 +650,17 @@ class MetaTargetingResolver:
                 f"Meta Targeting Search transport error for {search_type} {q!r}: {e.reason}"
             ) from e
         return body.get("data", [])
+
+
+def _apply_age(targeting: dict[str, Any], age: Any) -> None:
+    """Map an `icp.age` {min, max} onto Meta's top-level age_min / age_max.
+    Either bound may be omitted; Meta applies its own defaults (18–65)."""
+    if not isinstance(age, dict):
+        return
+    if age.get("min") is not None:
+        targeting["age_min"] = int(age["min"])
+    if age.get("max") is not None:
+        targeting["age_max"] = int(age["max"])
 
 
 def _audience_reach(candidate: dict[str, Any]) -> int:
