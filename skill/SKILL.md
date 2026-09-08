@@ -24,6 +24,8 @@ metadata:
           "META_AD_ACCOUNT_ID",
           "LINKEDIN_ACCESS_TOKEN",
           "LINKEDIN_AD_ACCOUNT_URN",
+          "LINKEDIN_CLIENT_ID",
+          "LINKEDIN_CLIENT_SECRET",
           "OPENROUTER_API_KEY",
           "ANTHROPIC_API_KEY",
           "ADLOOPS_BRAND_DIR"
@@ -50,6 +52,14 @@ Before running:
 2. **Wire credentials** for at least one platform (see `setup.md` for the application steps).
 3. **Fill in the brand config** (`brand.json`). The skill refuses to run if `icp.personas` is empty. Run `cd skill && ../.venv/bin/python -m scripts.run --scaffold` to create the directory + a copy of the example file. Default location is `~/.adloops/brand/brand.json`; override with `ADLOOPS_BRAND_DIR`.
 4. **Confirm the OC Telegram bot is reachable** — the skill reads `TELEGRAM_BOT_TOKEN` from the OpenClaw process env. Set `ADLOOPS_TELEGRAM_CHAT_ID` to the chat that should receive the report.
+
+### LinkedIn OAuth scopes
+
+For LinkedIn reporting, request `r_ads r_ads_reporting`. For guarded pause,
+enable, or daily-budget updates, request `r_ads r_ads_reporting rw_ads`. The
+client ID and client secret are required only to run OAuth setup; runtime reads
+and mutations use `LINKEDIN_ACCESS_TOKEN`. Never store OAuth values in
+`brand.json`, a skill, or Git.
 
 ## Run it
 
