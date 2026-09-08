@@ -64,6 +64,22 @@ python -m scripts.run --approve <run>:<idx>   # replay a queued APPROVAL row aft
 
 See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.
 
+### LinkedIn OAuth scopes
+
+Use the smallest scope set that matches the run mode:
+
+```text
+# Reporting only
+r_ads r_ads_reporting
+
+# Guardrailed pause / enable / daily-budget changes
+r_ads r_ads_reporting rw_ads
+```
+
+`rw_ads` permits campaign management but does not bypass AdLoops guardrails.
+Every live mutation still requires a preflight read and read-back verification;
+scheduled LinkedIn mutations stay disabled until a named live action succeeds.
+
 ## Phasing
 
 1. **Phase 1** — read-only audit + GA4 cross-reference + Telegram report. ✅ shipped.
