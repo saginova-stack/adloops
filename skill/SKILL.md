@@ -1,6 +1,6 @@
 ---
 name: adloops
-description: "Twice-weekly audit and guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, joins Google Ads with GA4 to flag consent gaps and attribution discrepancies, proposes mutations within a ±20% budget cap (pause zombies, scale winners, slow CPA spikes), and posts a structured report to Telegram. On Meta, budget changes are ad-set- and lifetime-budget aware (not just campaign-level CBO), and a desired-state reconciler creates any campaigns you declare in brand.json that are missing — always PAUSED, through the guardrails — optionally scaffolding a default ad set whose targeting is either explicit, derived from the brand ICP (geo, interests, company size, age via Meta Targeting Search), or attached from Custom / Lookalike Audiences you bring. LinkedIn reads work today; LinkedIn mutations land in Phase 3 once Marketing Developer Platform approval comes through. Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, apply auto-pilot tweaks within hard guardrails, or declare the Meta campaigns that should exist."
+description: "Twice-weekly audit and guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Pulls last 7d performance, diffs against the prior run, joins Google Ads with GA4 to flag consent gaps and attribution discrepancies, proposes mutations within a ±20% budget cap (pause zombies, scale winners, slow CPA spikes), and posts a structured report to Telegram. On Meta, budget changes are ad-set- and lifetime-budget aware (not just campaign-level CBO), and a desired-state reconciler creates any campaigns you declare in brand.json that are missing — always PAUSED, through the guardrails — optionally scaffolding a default ad set whose targeting is either explicit, derived from the brand ICP (geo, interests, company size, age via Meta Targeting Search), or attached from Custom / Lookalike Audiences you bring. LinkedIn reads are live-verified; LinkedIn mutations require a separate rw_ads grant and live explicit-action verification before enablement. Use when the user wants to know how their ads are performing this week, schedule a recurring ads audit, apply auto-pilot tweaks within hard guardrails, or declare the Meta campaigns that should exist."
 metadata:
   {
     "openclaw": {
@@ -38,7 +38,7 @@ metadata:
 
 Audits paid ad accounts (Google, Meta, LinkedIn) on a 2x/week cadence, diffs against the prior run, and (Phase 2) auto-applies budget tweaks within hard guardrails — every mutation gated on ±20% per-run budget change, mandatory PAUSED status on new campaigns, optional cross-platform daily-spend ceiling, and an append-only audit log. Posts the report to Telegram via the existing OpenClaw bot.
 
-Phase 2 (current) wires guardrailed mutations on Google Ads and Meta. LinkedIn stays read-only (Phase 3, blocked on Marketing Developer Platform approval). The audit also enriches Google Ads campaigns with GA4 paid-traffic data to surface consent gaps, attribution discrepancies, and real (GA4-counted) CPA.
+Guardrailed mutations are live on Google Ads and Meta. LinkedIn campaign reads are live-verified via the current LinkedIn REST API. Its pause, enable, and budget mutation executor is gated separately: require `rw_ads` in the token and verify one named, explicit action before enabling scheduled LinkedIn mutations. The audit also enriches Google Ads campaigns with GA4 paid-traffic data to surface consent gaps, attribution discrepancies, and real (GA4-counted) CPA.
 
 Before running:
 
@@ -125,7 +125,7 @@ Every mutation — proposed, applied, or rejected — writes one JSONL line to `
 
 Reads use direct Python SDKs (Google Ads, GA4 Data, Meta Marketing Graph, LinkedIn REST) — deterministic, no subprocess, cron-friendly. The audit computes the GA4 cross-reference join itself in Python; the report surfaces consent gap and attribution discrepancy signals.
 
-Writes go through the vendored MCPs. Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph (no public MCP shim exists). LinkedIn writes are wired but locked behind Phase 3.
+Writes go through the vendored MCPs. Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph (no public MCP shim exists). LinkedIn pause, enable, and budget writes are wired, but must remain disabled until a separate `rw_ads` OAuth grant and live explicit-action verification have succeeded.
 
 Meta budget changes are budget-location-aware: the executor GETs the live budget before writing, so a change scales the campaign budget on Campaign Budget Optimization (Advantage Campaign Budget) accounts and fans out proportionally across ad-set budgets on the common non-CBO setup — daily or lifetime. Reads mirror this: a non-CBO campaign's `daily_budget` is the sum of its ad-set daily budgets.
 
@@ -152,7 +152,7 @@ Run `./install.sh` from the repo root for the one-time setup that prepares both 
 
 ## What's NOT in this build
 
-- LinkedIn mutations (Phase 3, after Marketing Developer Platform approval)
+- Automatic LinkedIn mutations before a dedicated `rw_ads` grant and explicit live verification
 - Creative generation (Phase 4, separate spec)
 - TikTok / YouTube / Microsoft Ads (out of spec)
 

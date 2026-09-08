@@ -2,7 +2,7 @@
 
 Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
 
-> Phase 1 (read-only audit + GA4 cross-reference), Phase 2 (guardrailed mutations on Google + Meta, LLM recommendations), and Phase 3 (LinkedIn mutation executor) shipped. LinkedIn mutations still need Marketing Developer Platform approval before they can run against live accounts — the code is in place and tested against MCP mocks.
+> LinkedIn campaign reads are live-verified against the current versioned Marketing API. Guardrailed LinkedIn pause, enable, and budget mutations have an executor, but require a fresh OAuth token granted `rw_ads` and a live verification before they are enabled. AdLoops never enables LinkedIn mutations merely because reporting credentials exist.
 >
 > Meta support goes beyond campaign-level CBO budgets: budget changes are ad-set- and lifetime-budget aware, and a **desired-state reconciler** creates any campaigns you declare in `brand.json` that are missing (always PAUSED, through the guardrails) and reconciles budget drift on ones that exist. Declared campaigns can scaffold a default ad set whose targeting is explicit, **derived from the brand ICP** (geo / interests / company size / age via Meta Targeting Search), or attached from **Custom / Lookalike Audiences** you bring — the real path for firmographic targeting Meta has no native facet for.
 
@@ -68,5 +68,5 @@ See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.
 
 1. **Phase 1** — read-only audit + GA4 cross-reference + Telegram report. ✅ shipped.
 2. **Phase 2** — guardrailed Google + Meta mutations, LLM-driven recommendations, `--approve` mode. ✅ shipped.
-3. **Phase 3** — LinkedIn mutations. ✅ executor shipped (tested against MCP mocks); live calls require Marketing Developer Platform approval on the LinkedIn app (1–5 day SLA from LinkedIn) plus a one-time `node dist/auth-cli.js` to seed the token store.
+3. **LinkedIn** — campaign reads are live-verified with `r_ads` + `r_ads_reporting`. Guardrailed pause, enable, and budget mutations are implemented but remain off until a dedicated `rw_ads` OAuth grant and a live, explicit-action verification succeed.
 4. **Phase 4** — creative generation. Out of scope for this repo.

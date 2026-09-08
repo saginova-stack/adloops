@@ -20,13 +20,13 @@ Meta Ads, and LinkedIn Ads, posted to Telegram via the OpenClaw bot.
   nowhere else. Capped at 10 mutations per run. LLM-driven recommendations
   (OpenRouter Nemotron → Anthropic Haiku → rule-based fallback) replace
   the rule-based recommendations when a key is present.
-- **Phase 3 (LinkedIn mutations)**: executor code is in place and tested
-  against MCP mocks. To go live against real accounts you still need
-  (a) LinkedIn Marketing Developer Platform approval on the LinkedIn app
-  and (b) a one-time `node dist/auth-cli.js` run inside
-  `skill/mcp-servers/linkedin-ads` to seed the MCP's token store.
-  Without those, calls will fail with a LinkedIn auth error from the
-  MCP — same as if the OAuth wasn't done.
+- **LinkedIn reads**: live-verified against the current versioned REST API
+  with `r_ads` and `r_ads_reporting`. The current API uses account-scoped
+  campaign search and Rest.li composite analytics queries.
+- **LinkedIn mutations**: pause, enable, and budget executor code is present,
+  but must stay off until the OAuth token includes `rw_ads` and one named,
+  explicit live action has been verified. Reporting credentials alone never
+  authorize mutations.
 
 ## 1. First-run install
 

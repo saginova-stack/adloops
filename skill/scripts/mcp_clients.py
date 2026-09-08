@@ -710,7 +710,7 @@ class LinkedInAdsClient:
     """
 
     REQUIRED_ENV = ("LINKEDIN_ACCESS_TOKEN", "LINKEDIN_AD_ACCOUNT_URN")
-    API_VERSION = "202504"
+    API_VERSION = "202509"
 
     def __init__(self):
         missing = [k for k in self.REQUIRED_ENV if not os.environ.get(k)]
@@ -761,12 +761,10 @@ class LinkedInAdsClient:
         }
 
     def _list_campaigns(self) -> dict[str, dict[str, Any]]:
-        url = "https://api.linkedin.com/rest/adCampaigns"
-        params = {
-            "q": "search",
-            "search.account.values[0]": self.account_urn,
-            "count": "100",
-        }
+        # The current versioned REST API scopes campaign search to the account
+        # path; the legacy global endpoint with search.account is rejected.
+        url = f"https://api.linkedin.com/rest/adAccounts/{self.account_id}/adCampaigns"
+        params = {"q": "search"}
         rows = _fetch_paged(url, params, items_key="elements", headers=self._headers())
         out: dict[str, dict[str, Any]] = {}
         for r in rows:
@@ -779,22 +777,28 @@ class LinkedInAdsClient:
             return {}
         s = dt.date.fromisoformat(start)
         e = dt.date.fromisoformat(end)
-        url = "https://api.linkedin.com/rest/adAnalytics"
-        params = {
-            "q": "analytics",
-            "pivot": "CAMPAIGN",
-            "timeGranularity": "ALL",
-            f"dateRange.start.year": str(s.year),
-            f"dateRange.start.month": str(s.month),
-            f"dateRange.start.day": str(s.day),
-            f"dateRange.end.year": str(e.year),
-            f"dateRange.end.month": str(e.month),
-            f"dateRange.end.day": str(e.day),
-            "fields": "costInLocalCurrency,impressions,clicks,externalWebsiteConversions,oneClickLeads,pivotValue",
-        }
-        for i, urn in enumerate(urns):
-            params[f"campaigns[{i}]"] = urn
-        rows = _fetch_paged(url, params, items_key="elements", headers=self._headers())
+        # LinkedIn's current REST analytics API uses Rest.li composite query
+        # values. This endpoint treats percent-encoded commas in `fields` as a
+        # literal field name, so the complete query must be assembled here.
+        account = urllib.parse.quote(self.account_urn, safe="")
+        query = (
+            f"accounts=List({account})&"
+            f"dateRange=(start:(year:{s.year},month:{s.month},day:{s.day}),"
+            f"end:(year:{e.year},month:{e.month},day:{e.day}))&"
+            "pivot=CAMPAIGN&q=analytics&timeGranularity=ALL&"
+            "fields=costInLocalCurrency,impressions,clicks,externalWebsiteConversions,pivotValues"
+        )
+        req = urllib.request.Request(
+            f"https://api.linkedin.com/rest/adAnalytics?{query}", headers=self._headers()
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                rows = json.loads(resp.read().decode("utf-8")).get("elements", [])
+        except urllib.error.HTTPError as e:
+            raise RuntimeError(
+                f"HTTP {e.code} from LinkedIn adAnalytics: "
+                f"{e.read().decode('utf-8', 'replace')}"
+            ) from e
         out: dict[str, dict[str, Any]] = {}
         for r in rows:
             urn = r.get("pivotValue") or r.get("pivotValues", [None])[0]
