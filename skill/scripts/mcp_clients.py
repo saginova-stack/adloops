@@ -710,7 +710,7 @@ class LinkedInAdsClient:
     """
 
     REQUIRED_ENV = ("LINKEDIN_ACCESS_TOKEN", "LINKEDIN_AD_ACCOUNT_URN")
-    API_VERSION = "202509"
+    API_VERSION = "202608"
 
     def __init__(self):
         missing = [k for k in self.REQUIRED_ENV if not os.environ.get(k)]

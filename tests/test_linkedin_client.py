@@ -17,7 +17,7 @@ def test_linkedin_campaign_search_uses_account_scoped_current_rest_endpoint(monk
 
     assert seen["url"] == "https://api.linkedin.com/rest/adAccounts/539240077/adCampaigns"
     assert seen["params"] == {"q": "search"}
-    assert seen["headers"]["LinkedIn-Version"] == "202509"
+    assert seen["headers"]["LinkedIn-Version"] == "202608"
     assert result["urn:li:sponsoredCampaign:123"]["name"] == "Campaign"
 
 

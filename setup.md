@@ -23,10 +23,11 @@ Meta Ads, and LinkedIn Ads, posted to Telegram via the OpenClaw bot.
 - **LinkedIn reads**: live-verified against the current versioned REST API
   with `r_ads` and `r_ads_reporting`. The current API uses account-scoped
   campaign search and Rest.li composite analytics queries.
-- **LinkedIn mutations**: pause, enable, and budget executor code is present,
-  but must stay off until the OAuth token includes `rw_ads` and one named,
-  explicit live action has been verified. Reporting credentials alone never
-  authorize mutations.
+- **LinkedIn mutations**: pause, enable, and budget updates use the same
+  versioned REST/OAuth path as reporting. A write preflights the live campaign
+  and reads it back after LinkedIn accepts the partial update. The token must
+  include `rw_ads`; keep scheduled mutation off until one named, explicit live
+  action has been verified. Reporting credentials alone never authorize writes.
 
 ## 1. First-run install
 

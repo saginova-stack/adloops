@@ -27,7 +27,11 @@ proposer to read it from the audit.
 
 from __future__ import annotations
 
+from decimal import Decimal, InvalidOperation
+import json
 import os
+import urllib.error
+import urllib.request
 from typing import Any
 
 from .. import mcp_runner, paths
@@ -118,13 +122,129 @@ class LinkedInExecutor:
 
 
 def dispatch(mutation: Mutation, *, dry_run: bool = False) -> dict[str, Any]:
-    """One-shot dispatch — spawns the MCP, runs the mutation, tears down.
+    """Dispatch through the verified versioned LinkedIn REST API.
 
-    For batches use ``LinkedInExecutor()`` as a context manager so one
-    spawn serves many mutations.
+    The legacy MCP-backed ``LinkedInExecutor`` remains available for callers
+    that explicitly use it, but normal AdLoops dispatch uses the same OAuth
+    token path as the live reader. Every non-dry-run write reads the campaign
+    first and verifies the exact resource after LinkedIn accepts the update.
     """
-    with LinkedInExecutor() as ex:
-        return ex.dispatch(mutation, dry_run=dry_run)
+    token = os.environ.get("LINKEDIN_ACCESS_TOKEN")
+    if not token:
+        raise ExecutorError("LINKEDIN_ACCESS_TOKEN not set")
+    account_urn = os.environ.get("LINKEDIN_AD_ACCOUNT_URN")
+    if not account_urn:
+        raise ExecutorError("LINKEDIN_AD_ACCOUNT_URN not set")
+    account_id = account_urn.rsplit(":", 1)[-1]
+    campaign_id = _campaign_id(mutation)
+    if not account_id.isdigit() or not campaign_id.isdigit():
+        raise ExecutorError("LinkedIn account and campaign IDs must have numeric URN tails")
+
+    url = f"https://api.linkedin.com/rest/adAccounts/{account_id}/adCampaigns/{campaign_id}"
+    changes = _rest_changes(mutation, dry_run=dry_run)
+    body = {"patch": {"$set": changes}}
+    if dry_run:
+        return {
+            "dry_run": True,
+            "method": "POST",
+            "url": url,
+            "body": body,
+            "campaign_id": mutation.campaign_id,
+        }
+
+    live = _get_campaign(url, token)
+    _assert_expected_live_state(live, mutation, account_urn)
+    if mutation.kind == "budget_change":
+        currency = (live.get("dailyBudget") or {}).get("currencyCode")
+        if not currency:
+            raise ExecutorError("LinkedIn campaign has no dailyBudget currency")
+        changes["dailyBudget"]["currencyCode"] = currency
+    _partial_update(url, token, body)
+    verified = _get_campaign(url, token)
+    _assert_applied(verified, mutation, changes)
+    return {"applied": True, "verified": True, "campaign_id": mutation.campaign_id}
+
+
+API_VERSION = "202608"
+
+
+def _rest_changes(mutation: Mutation, *, dry_run: bool) -> dict[str, Any]:
+    if mutation.kind == "pause":
+        return {"status": "PAUSED"}
+    if mutation.kind == "enable":
+        return {"status": "ACTIVE"}
+    if mutation.kind != "budget_change":
+        raise ExecutorError(f"Unsupported mutation kind for LinkedIn: {mutation.kind!r}")
+    try:
+        amount = Decimal(str(mutation.after.get("daily_budget")))
+    except (InvalidOperation, ValueError) as e:
+        raise ExecutorError("budget_change has invalid after.daily_budget") from e
+    if amount <= 0:
+        raise ExecutorError(f"budget_change has non-positive after.daily_budget: {amount}")
+    currency = mutation.after.get("currency")
+    if dry_run and not currency:
+        raise ExecutorError("budget_change dry-run requires explicit after.currency")
+    budget: dict[str, str] = {"amount": format(amount, "f")}
+    if currency:
+        budget["currencyCode"] = str(currency)
+    return {"dailyBudget": budget}
+
+
+def _headers(token: str, *, partial_update: bool = False) -> dict[str, str]:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-Restli-Protocol-Version": "2.0.0",
+        "Linkedin-Version": API_VERSION,
+    }
+    if partial_update:
+        headers.update({"Content-Type": "application/json", "X-RestLi-Method": "PARTIAL_UPDATE"})
+    return headers
+
+
+def _get_campaign(url: str, token: str) -> dict[str, Any]:
+    req = urllib.request.Request(url, headers=_headers(token), method="GET")
+    return _request_json(req)
+
+
+def _partial_update(url: str, token: str, body: dict[str, Any]) -> None:
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body, separators=(",", ":")).encode(),
+        headers=_headers(token, partial_update=True),
+        method="POST",
+    )
+    _request_json(req)
+
+
+def _request_json(req: urllib.request.Request) -> dict[str, Any]:
+    try:
+        with urllib.request.urlopen(req, timeout=30) as response:
+            raw = response.read().decode("utf-8")
+    except urllib.error.HTTPError as e:
+        text = e.read().decode("utf-8", "replace")[:500]
+        raise ExecutorError(f"LinkedIn API HTTP {e.code}: {text}") from e
+    return json.loads(raw) if raw else {}
+
+
+def _assert_expected_live_state(live: dict[str, Any], mutation: Mutation, account_urn: str) -> None:
+    if live.get("account") != account_urn:
+        raise ExecutorError("LinkedIn campaign belongs to a different ad account")
+    if mutation.kind in {"pause", "enable"}:
+        expected = mutation.before.get("status")
+        if expected and live.get("status") != expected:
+            raise ExecutorError(f"stale LinkedIn campaign status: expected {expected}, found {live.get('status')}")
+
+
+def _assert_applied(live: dict[str, Any], mutation: Mutation, changes: dict[str, Any]) -> None:
+    if mutation.kind in {"pause", "enable"}:
+        target = changes["status"]
+        if live.get("status") != target:
+            raise ExecutorError(f"LinkedIn status verification failed: expected {target}, found {live.get('status')}")
+        return
+    expected = changes["dailyBudget"]
+    actual = live.get("dailyBudget") or {}
+    if actual.get("currencyCode") != expected.get("currencyCode") or str(actual.get("amount")) != expected.get("amount"):
+        raise ExecutorError("LinkedIn daily budget verification failed")
 
 
 def _to_tool_args(m: Mutation) -> dict[str, Any]:

@@ -38,7 +38,7 @@ metadata:
 
 Audits paid ad accounts (Google, Meta, LinkedIn) on a 2x/week cadence, diffs against the prior run, and (Phase 2) auto-applies budget tweaks within hard guardrails — every mutation gated on ±20% per-run budget change, mandatory PAUSED status on new campaigns, optional cross-platform daily-spend ceiling, and an append-only audit log. Posts the report to Telegram via the existing OpenClaw bot.
 
-Guardrailed mutations are live on Google Ads and Meta. LinkedIn campaign reads are live-verified via the current LinkedIn REST API. Its pause, enable, and budget mutation executor is gated separately: require `rw_ads` in the token and verify one named, explicit action before enabling scheduled LinkedIn mutations. The audit also enriches Google Ads campaigns with GA4 paid-traffic data to surface consent gaps, attribution discrepancies, and real (GA4-counted) CPA.
+Guardrailed mutations are live on Google Ads and Meta. LinkedIn campaign reads are live-verified via the current LinkedIn REST API. LinkedIn pause, enable, and budget mutation requests use the same REST/OAuth path, with a live preflight read and read-back verification. They require `rw_ads`; keep scheduled LinkedIn mutations off until one named, explicit live action succeeds. The audit also enriches Google Ads campaigns with GA4 paid-traffic data to surface consent gaps, attribution discrepancies, and real (GA4-counted) CPA.
 
 Before running:
 
@@ -125,7 +125,7 @@ Every mutation — proposed, applied, or rejected — writes one JSONL line to `
 
 Reads use direct Python SDKs (Google Ads, GA4 Data, Meta Marketing Graph, LinkedIn REST) — deterministic, no subprocess, cron-friendly. The audit computes the GA4 cross-reference join itself in Python; the report surfaces consent gap and attribution discrepancy signals.
 
-Writes go through the vendored MCPs. Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph (no public MCP shim exists). LinkedIn pause, enable, and budget writes are wired, but must remain disabled until a separate `rw_ads` OAuth grant and live explicit-action verification have succeeded.
+Google Ads mutations use the kLOsk/adloop MCP's `preview → confirm_and_apply` two-step over stdio (matches our guardrail flow exactly). Meta mutations go direct to the Marketing Graph. LinkedIn pause, enable, and budget writes go direct to the versioned LinkedIn REST API with the OAuth token; they preflight the live campaign and read it back after a successful partial update. A separate `rw_ads` OAuth grant is required, and scheduled LinkedIn mutations remain disabled until explicit live-action verification succeeds.
 
 Meta budget changes are budget-location-aware: the executor GETs the live budget before writing, so a change scales the campaign budget on Campaign Budget Optimization (Advantage Campaign Budget) accounts and fans out proportionally across ad-set budgets on the common non-CBO setup — daily or lifetime. Reads mirror this: a non-CBO campaign's `daily_budget` is the sum of its ad-set daily budgets.
 
