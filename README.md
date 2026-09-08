@@ -2,7 +2,7 @@
 
 Twice-weekly audit + guardrailed auto-tweak loop for paid ads on Google Ads, Meta Ads, and LinkedIn Ads. Packaged as an OpenClaw skill (also runnable as a Claude Code skill — same shape). Posts a structured report to Telegram via the existing OpenClaw bot.
 
-> LinkedIn campaign reads are live-verified against the current versioned Marketing API. Guardrailed LinkedIn pause, enable, and budget mutations have an executor, but require a fresh OAuth token granted `rw_ads` and a live verification before they are enabled. AdLoops never enables LinkedIn mutations merely because reporting credentials exist.
+> LinkedIn campaign reads are live-verified against the current versioned Marketing API. Guardrailed LinkedIn pause, enable, and budget mutations use the same direct REST/OAuth path: every live write GETs the campaign first and GET-verifies it afterward. They require an OAuth token granted `rw_ads`; scheduled mutation remains off until one named live action has been verified.
 >
 > Meta support goes beyond campaign-level CBO budgets: budget changes are ad-set- and lifetime-budget aware, and a **desired-state reconciler** creates any campaigns you declare in `brand.json` that are missing (always PAUSED, through the guardrails) and reconciles budget drift on ones that exist. Declared campaigns can scaffold a default ad set whose targeting is explicit, **derived from the brand ICP** (geo / interests / company size / age via Meta Targeting Search), or attached from **Custom / Lookalike Audiences** you bring — the real path for firmographic targeting Meta has no native facet for.
 
@@ -26,7 +26,7 @@ adloops/
 │   │   ├── mcp_runner.py        ← synchronous MCP stdio JSON-RPC client
 │   │   ├── executors/
 │   │   │   ├── google.py        ← adloop MCP preview/confirm
-│   │   │   ├── linkedin.py      ← linkedin-ads MCP update_campaign
+│   │   │   ├── linkedin.py      ← direct REST guarded campaign updates
 │   │   │   └── meta.py          ← Marketing Graph API direct (ad-set/lifetime budgets, create_campaign + ad-set scaffolding, Custom/Lookalike Audiences)
 │   │   ├── recommender.py       ← OpenRouter → Anthropic → rule-based chain
 │   │   └── telegram_report.py
@@ -68,5 +68,5 @@ See [`setup.md`](./setup.md) for credentials, scheduling, exit codes.
 
 1. **Phase 1** — read-only audit + GA4 cross-reference + Telegram report. ✅ shipped.
 2. **Phase 2** — guardrailed Google + Meta mutations, LLM-driven recommendations, `--approve` mode. ✅ shipped.
-3. **LinkedIn** — campaign reads are live-verified with `r_ads` + `r_ads_reporting`. Guardrailed pause, enable, and budget mutations are implemented but remain off until a dedicated `rw_ads` OAuth grant and a live, explicit-action verification succeed.
+3. **LinkedIn** — campaign reads are live-verified with `r_ads` + `r_ads_reporting`. Guardrailed pause, enable, and budget mutations use direct versioned REST updates with `rw_ads`, preflight reads, and read-back verification. Automatic scheduled writes remain off until a named live action succeeds.
 4. **Phase 4** — creative generation. Out of scope for this repo.
